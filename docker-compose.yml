@@ -1,0 +1,55 @@
+# NIGHTWATCH AI · local production stack.
+# Bring up with:  docker compose up --build
+# Data persists in ./data (mounted).
+
+services:
+  nightwatch:
+    build: .
+    image: nightwatch-ai:local
+    container_name: nightwatch
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # ---- required in production ----
+      JWT_SECRET: "${JWT_SECRET:-change_me_use_openssl_rand_base64_48}"
+      # ---- optional: LLM narration ----
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      # ---- optional: Bitget MCP sidecar for live bitget-signal skills ----
+      BITGET_MCP_URL: "${BITGET_MCP_URL:-}"
+      # ---- optional: Bitget Agent Account OAuth (for live paper routing) ----
+      BITGET_OAUTH_CLIENT_ID: "${BITGET_OAUTH_CLIENT_ID:-}"
+      BITGET_OAUTH_CLIENT_SECRET: "${BITGET_OAUTH_CLIENT_SECRET:-}"
+      BITGET_OAUTH_REDIRECT_URI: "${BITGET_OAUTH_REDIRECT_URI:-}"
+      # ---- tuning ----
+      RATE_RESEARCH: "60"
+      NEWS_ENABLED: "1"
+      NEWS_POLL_MS: "60000"
+      PRICES_TICK_MS: "10000"
+      LOG_LEVEL: "info"
+      CORS_ORIGIN: "*"
+      NIGHTWATCH_DATA_DIR: /data
+      # Beta convenience: the SPA's sign-in uses email-only dev-login.
+      # Remove this (and ship real auth) before taking on real users.
+      ALLOW_DEV_LOGIN: "1"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: run the Bitget Agent Hub MCP sidecar alongside NIGHTWATCH so
+  # bitget-signal skills come from Bitget MCP instead of our local pack.
+  # Uncomment when you have Bitget Agent Hub installed and adjust the image.
+  #
+  # bitget-mcp:
+  #   image: ghcr.io/bitgetlimited/agent-hub-mcp:latest
+  #   container_name: bitget-mcp
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9091:9091"
+  #   command: ["mcp", "serve", "--port", "9091"]

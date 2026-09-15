@@ -1,6 +1,6 @@
 /* NIGHTWATCH AI service worker.
  * Precache the app shell; network-first for API; cache-first for assets. */
-const CACHE = 'nw-v2'
+const CACHE = 'nw-v3'
 const SHELL = ['./', './manifest.webmanifest']
 
 self.addEventListener('install', (e) => {
@@ -17,6 +17,18 @@ self.addEventListener('fetch', (e) => {
   if (isApi) {
     // network-first, no cache for live data
     e.respondWith(fetch(e.request).catch(() => new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } })))
+    return
+  }
+  // HTML documents — network-first with cache fallback so deploys propagate;
+  // hashed build assets stay cache-first (immutable by filename).
+  if (e.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    e.respondWith(fetch(e.request).then(res => {
+      if (res.ok) {
+        const clone = res.clone()
+        caches.open(CACHE).then(c => c.put(e.request, clone))
+      }
+      return res
+    }).catch(() => caches.match(e.request).then(hit => hit || caches.match('./'))))
     return
   }
   // static assets — cache-first

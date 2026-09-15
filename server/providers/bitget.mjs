@@ -17,10 +17,14 @@
  *     instead of collapsing to null. Callers still surface freshness honestly.
  */
 
-const BITGET_BASE = process.env.BITGET_BASE_URL || 'https://api.bitget.com'
+export const BITGET_BASE = process.env.BITGET_BASE_URL || 'https://api.bitget.com'
 const BITGET_CACHE_MS = Number(process.env.BITGET_CACHE_MS || 5000)
 const BITGET_TIMEOUT_MS = Number(process.env.BITGET_TIMEOUT_MS || 5000)
 const BITGET_STALE_MS = Number(process.env.BITGET_STALE_MS || 10 * 60_000)
+// When traffic is routed through a relay (e.g. the Cloudflare Worker in
+// relay/), this secret is sent as `x-relay-key` so the relay can reject
+// third parties. Leave empty for direct api.bitget.com access.
+const BITGET_RELAY_KEY = process.env.BITGET_RELAY_KEY || ''
 
 /** Universe ticker → Bitget spot symbol. Equities use Bitget's R-prefixed tokenized-stock pairs. */
 export const SYMBOL_MAP = new Map([
@@ -91,7 +95,10 @@ async function fetchJson(url, { retries = 3 } = {}) {
         // Some CDN/edge configs 403 requests without a browser-like UA. Shared
         // cloud IPs (Railway, etc.) are especially prone to this on the
         // per-symbol candles/orderbook endpoints.
-        headers: { 'User-Agent': 'Mozilla/5.0 NightwatchAI/1.1 (research; +https://nightwatchai.watch)' },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 NightwatchAI/1.1 (research; +https://nightwatchai.watch)',
+          ...(BITGET_RELAY_KEY ? { 'x-relay-key': BITGET_RELAY_KEY } : {}),
+        },
         signal: AbortSignal.timeout(BITGET_TIMEOUT_MS),
       })
       if (!response.ok) {

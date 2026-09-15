@@ -12,7 +12,7 @@
  */
 
 import { logger } from '../lib/log.mjs'
-import { getBook as bitgetGetBook, getTicker as bitgetGetTicker, isSupported as bitgetSupported } from './bitget.mjs'
+import { getBook as bitgetGetBook, getTicker as bitgetGetTicker, isSupported as bitgetSupported, BITGET_BASE } from './bitget.mjs'
 
 const CACHE_MS = Number(process.env.CROSS_CACHE_MS || 15_000)
 const TIMEOUT_MS = Number(process.env.CROSS_TIMEOUT_MS || 3500)
@@ -34,7 +34,12 @@ function setCached(k, v) { cache.set(k, { at: Date.now(), value: v }) }
 
 async function fetchJson(url) {
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'NightwatchAI/1.0' }, signal: AbortSignal.timeout(TIMEOUT_MS) })
+    // Bitget calls go through BITGET_BASE (relay-aware) and carry the relay
+    // key when one is configured; Binance/OKX ignore the extra header.
+    const isBitget = url.startsWith(BITGET_BASE)
+    const headers = { 'User-Agent': 'NightwatchAI/1.0' }
+    if (isBitget && process.env.BITGET_RELAY_KEY) headers['x-relay-key'] = process.env.BITGET_RELAY_KEY
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) })
     if (!res.ok) return null
     return await res.json()
   } catch { return null }
@@ -71,13 +76,13 @@ async function okxOi(pair) {
 /* ---------------------------------------------------- Bitget perps */
 
 async function bitgetFunding(pair) {
-  const body = await fetchJson(`https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=${pair}&productType=USDT-FUTURES`)
+  const body = await fetchJson(`${BITGET_BASE}/api/v2/mix/market/current-fund-rate?symbol=${pair}&productType=USDT-FUTURES`)
   const row = body?.data?.[0]
   if (!row) return null
   return { venue: 'bitget', pair, fundingRate: Number(row.fundingRate), markPrice: null, nextFundingTime: null }
 }
 async function bitgetOi(pair) {
-  const body = await fetchJson(`https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${pair}&productType=USDT-FUTURES`)
+  const body = await fetchJson(`${BITGET_BASE}/api/v2/mix/market/open-interest?symbol=${pair}&productType=USDT-FUTURES`)
   const row = body?.data?.openInterestList?.[0]
   if (!row?.size) return null
   const openInterest = Number(row.size)

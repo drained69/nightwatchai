@@ -1,8 +1,9 @@
 {
   "name": "nightwatch-ai",
+  "version": "1.2.0",
   "private": true,
-  "version": "1.1.0",
-  "description": "NIGHTWATCH AI — AI trading research workstation for the Bitget AI Trading Desk track.",
+  "description": "NIGHTWATCH AI — AI trading research workstation. Real Bitget tape, Qwen-authored desk analysis, personal paper book, magic-link email sign-in.",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -12,17 +13,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test src/domain.test.js src/backtest.test.js server/lib/lib.test.mjs server/lib/tier2.test.mjs server/lib/getagent.test.mjs server/lib/live-data.test.mjs",
-    "server": "node server/adapter.mjs",
-    "serve": "node server/static-serve.mjs",
-    "server:legacy": "node server/desk-adapter.mjs",
-    "start": "node server/static-serve.mjs"
+    "server": "node --env-file-if-exists=.env server/adapter.mjs",
+    "start": "node --env-file-if-exists=.env server/static-serve.mjs",
+    "lint:demo-strings": "npm run build --silent && (! grep -oE 'DEMO . SIMULATED DATA|SEEDED DEMO DATA|TRACK 3' dist/assets/*.js || (echo 'Demo/hackathon strings shipped in the built bundle!' && exit 1))"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "vite": "latest",
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^1.43.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "vite": "^8.2.2",
     "web-push": "^3.6.7"
   }
 }

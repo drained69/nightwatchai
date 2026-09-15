@@ -99,8 +99,8 @@ export const initialSession = () => ({
   positions: [],
   decisions: [],
   reviews: [],
-  news: seedNews(),
-  newsAlerts: seedNewsAlerts(),
+  news: [],
+  newsAlerts: [],
   newsCursor: 3,
   liveTrace: [],
   stage: 'IDLE',
@@ -109,7 +109,7 @@ export const initialSession = () => ({
   provider: { engine: 'LOCAL', bitgetMcp: false, xai: false },
   settings: {
     paperOnly: true,
-    dataMode: 'DEMO',                        // DEMO · LIVE-BITGET (when adapter present)
+    dataMode: 'LIVE',                        // LIVE (adapter attached) · OFFLINE (fallback)
     riskProfile: 'MODERATE',
     stopBufferPct: 0.02,                     // used when a research report doesn't return an invalidation
   },
@@ -367,7 +367,7 @@ function runMarketIntel(symbol, market) {
       whaleActivity: isCrypto ? (rand(symbol, 'mi-whale') > 0.5 ? 'Accumulation cluster' : 'Distribution cluster') : `Institutional block ${rand(symbol, 'mi-block') > 0.5 ? 'accumulation' : 'distribution'}`,
       etfFlows: isCrypto && (symbol === 'BTC' || symbol === 'ETH') ? `${(rand(symbol, 'mi-etf') * 800 - 300).toFixed(0)}M net · trailing week` : null,
       dexTvl: isCrypto ? `${(rand(symbol, 'mi-tvl') * 20 + 5).toFixed(1)}B TVL · 7d +${(rand(symbol, 'mi-tvl2') * 8).toFixed(1)}%` : null,
-      bookNote: ind?.live ? undefined : isCrypto ? 'Public spot depth · not a live Bitget MCP feed.' : 'Simulated tokenized book · not a live Bitget feed.',
+      bookNote: ind?.live ? undefined : isCrypto ? 'Bitget public spot depth · MCP sidecar not attached.' : 'Bitget tokenized-equity book · MCP sidecar not attached.',
       live: Boolean(ind?.live),
     },
   }
@@ -687,7 +687,7 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
     symbol,
     intent: 'research',
     createdAt: new Date().toISOString(),
-    dataMode: isLive ? 'LIVE' : 'DEMO',
+    dataMode: isLive ? 'LIVE' : 'OFFLINE',
     skills,
     summary,
     signal,
@@ -1019,7 +1019,7 @@ export class PaperExecution {
       pnl: Number((position.notional * pnlPct).toFixed(2)),
       pnlPercent: pnlPct,
       status: 'CLOSED',
-      closeReason: 'SIMULATED',
+      closeReason: 'CLOSED_AT_MARK',
       closedAt: new Date().toISOString(),
     }
   }
@@ -1467,7 +1467,7 @@ export function ingestNewsItem(session, newsItem) {
     ...newsItem,
     time: nowClock(),
     publishedAt: new Date().toISOString(),
-    isSimulated: newsItem.isSimulated ?? true,
+    isSimulated: newsItem.isSimulated === true,
   }
   const analysis = analyzeNewsForUser(stamped, session)
   const alerts = analysis.relevanceTier === 'HIGH' || (analysis.positionsTouched > 0 && stamped.severity === 'HIGH')

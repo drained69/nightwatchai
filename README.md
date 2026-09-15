@@ -1,20 +1,25 @@
 # NIGHTWATCH AI
 
-**AI trading research workstation.** Real-time Bitget prices · real news firehose · AI-classified impact · natural-language research · structured signal reports · stress-tested theses · portfolio impact · post-trade review · trader-gated paper trading.
+**Trade the information, not just the chart.**
 
-Built for the [Bitget AI Base Camp Hackathon S2](https://bitget-ai.gitbook.io/bitgetai_hackathons2) — **Track: AI Trading Desk · Sub-theme: Information Extraction & Signal Generation.**
+An AI trading research workbench **for event-driven and information-heavy traders** — the ones who move on earnings, macro prints, breaking news and overnight tape, not just candlestick patterns. Real Bitget tape · AI-authored desk analysis grounded on real facts · natural-language research · single-symbol Analysis workbench · stress-tested theses · portfolio impact · magic-link email sign-in · one-click copy-to-paper-portfolio.
 
 **AI researches → AI analyzes → AI explains → HUMAN makes the final trading decision.**
 
+Live at **[nightwatchai.up.railway.app](https://nightwatchai.up.railway.app)** (custom domain migration in progress to `nightwatchai.watch`).
+
 | | |
 |---|---|
-| **Universe** | 18 assets — 8 crypto majors + 10 tokenized U.S. mega-caps, **all with real live prices** (crypto via BTCUSDT-style spot pairs, equities via Bitget's R-prefixed tokenized-stock pairs like RNVDAUSDT) |
-| **Live data** | Bitget public REST (spot ticker, candles, orderbook) — refreshed every 10s, one retry, stale-while-revalidate cache so transient outages degrade honestly instead of collapsing |
-| **Live news** | CoinDesk · TheBlock · CoinTelegraph · SEC 8-K · Yahoo Finance · CNBC RSS ingester, dedup by content hash + cross-source collapse |
-| **Live macro** | DXY · S&P 500 · Nasdaq · VIX · UST10Y via Yahoo Finance public chart API — drives the macro-analyst skill and risk-regime read |
-| **Classification** | LLM classifier (xAI / Anthropic / OpenAI, first key wins) with word-boundary keyword-heuristic fallback |
-| **Streaming** | Server-Sent Events for both news + prices — no polling |
-| **Auth** | HS256 JWT, dev-login for local, Bitget Agent-Account OAuth scaffold |
+| **Universe** | 18 assets — 8 crypto majors + 10 tokenized U.S. mega-caps, **all with real live Bitget prices** (crypto via BTCUSDT-style spot pairs, equities via Bitget's R-prefixed tokenized-stock pairs like `RNVDAUSDT`) |
+| **Live tape** | Bitget public REST (spot ticker, 1h candles, 15-level orderbook) — refreshed every 10s, stale-while-revalidate cache so transient outages degrade honestly |
+| **Live news** | CoinDesk · The Block · CoinTelegraph · SEC 8-K · Yahoo Finance · CNBC RSS ingester with dedup by content hash + Qwen-classified per-ticker impact |
+| **Live macro** | DXY · S&P 500 · Nasdaq · VIX · UST10Y via Yahoo Finance — drives the `macro-analyst` skill and risk-regime read |
+| **AI narration** | Qwen3.8-max via Bitget's hosted endpoint (fallback chain: Qwen → xAI → Anthropic → OpenAI, first key wins) with word-boundary keyword-heuristic fallback |
+| **Analysis workbench** | Single-symbol `/analysis/{SYMBOL}` bundles Bitget ticker + indicators + book depth + cross-venue positioning + macro + symbol-tagged news, then Qwen writes a 4-part desk analysis with a verdict + entry/stop/target + invalidation |
+| **Cross-venue positioning** | Binance + OKX + Bitget perp funding + open interest, aggregated per asset with per-venue table showing Bitget as home venue |
+| **Streaming** | Server-Sent Events for prices + news — no client polling |
+| **Auth** | Passwordless email OTP via Resend (6-digit code, 10-min TTL, scrypt-hashed, timing-safe verify). HS256 JWT scopes every request to the account so watchlist, positions, reports and paper capital follow the email across devices |
+| **Persistence** | Per-user JSON files under `./data/` (drop-in Postgres path in `DEPLOYMENT.md`) |
 | **Persistence** | Per-user JSON files under `./data/` (drop-in Postgres path in `DEPLOYMENT.md`) |
 | **Trading** | Paper only by default. Live routing wiring documented in `DEPLOYMENT.md §5` |
 | **Deploy** | One Dockerfile, one `docker compose up`, `./data` volume, `/health` + `/metrics` |
@@ -32,7 +37,8 @@ Built for the [Bitget AI Base Camp Hackathon S2](https://bitget-ai.gitbook.io/bi
 | **Leaderboard** | Public ranking by followers / capital / live P&L / backtest return |
 | **The Assayer** | AI chat companion that drafts Playbooks from plain-English prompts |
 | **Live trading** | Bitget Agentic Account OAuth flow + trader-gated live order path + kill switch (opt-in only; paper-only by default) |
-| **Tests** | 89 `node:test` cases across domain + backtest + live-data paths + JWT + RSS + store + alerts + sharing + copilot |
+| **Copy to paper** | Every research report shows a top-of-page **Action Summary** card — verdict, plan (entry/stop/target/size/friction), one-click **COPY TO PAPER PORTFOLIO**, plus REJECT / SIT OUT / TRADE ON BITGET |
+| **Tests** | 93 `node:test` cases across domain + backtest + live-data paths + JWT + RSS + store + alerts + sharing + copilot |
 
 ---
 

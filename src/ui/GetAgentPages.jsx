@@ -30,36 +30,111 @@ export function saveAuth(user, token) {
 }
 export function logout() { try { localStorage.removeItem(TOK_KEY); localStorage.removeItem(USR_KEY) } catch { /* ignore */ } }
 
-/** ---------------- Sign-in inline widget ---------------- */
+/** ---------------- Passwordless email sign-in ---------------- */
 
+/**
+ * Email-only sign-in, like getagent.studio. Two steps:
+ *   1. User enters email → server sends a 6-digit code.
+ *   2. User enters the code → JWT comes back, personal session hydrates.
+ * First-time visitors are created transparently on successful verification —
+ * no separate "sign up" step. The JWT scopes every subsequent request to this
+ * user: watchlist, positions, reports, paper capital, alerts and playbooks
+ * all follow the email, not the browser.
+ */
 export function SignInWidget({ onSignedIn }) {
+  const [step, setStep] = useState('email')       // 'email' | 'code'
   const [email, setEmail] = useState('')
-  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const submit = async (e) => {
+  const [notice, setNotice] = useState(null)      // dev-mode "your code is …" hint
+
+  const cleanErr = (err) => {
+    const raw = String(err?.message || err || '')
+    return raw.replace(/^\d{3}\s+/, '').replace(/^Unauthorized$/, 'invalid code')
+  }
+
+  const requestCode = async (e) => {
     e?.preventDefault()
+    if (!email) return
+    setBusy(true); setError(null); setNotice(null)
+    try {
+      const r = await api('/auth/request-code', { method: 'POST', body: JSON.stringify({ email }) })
+      // Dev-mode convenience: when the server has no email provider configured
+      // it returns the code inline so local testing doesn't require SMTP.
+      if (r?.previewCode) setNotice(`Dev mode — your code is ${r.previewCode}`)
+      setStep('code')
+    } catch (err) { setError(cleanErr(err)) } finally { setBusy(false) }
+  }
+
+  const verifyCode = async (e) => {
+    e?.preventDefault()
+    if (!code) return
     setBusy(true); setError(null)
     try {
-      const r = await api('/auth/dev-login', { method: 'POST', body: JSON.stringify({ email, name }) })
+      const r = await api('/auth/verify-code', { method: 'POST', body: JSON.stringify({ email, code }) })
       saveAuth(r.user, r.token)
       onSignedIn?.(r.user, r.token)
-    } catch (err) { setError(err.message) } finally { setBusy(false) }
+    } catch (err) { setError(cleanErr(err)) } finally { setBusy(false) }
   }
+
+  const changeEmail = () => { setStep('email'); setCode(''); setError(null); setNotice(null) }
+
+  if (step === 'code') {
+    return (
+      <form className="panel signin-panel" onSubmit={verifyCode}>
+        <div className="panel-head">
+          <h3>Enter your sign-in code</h3>
+          <small>Sent to <b>{email}</b></small>
+        </div>
+        <div className="signin-body">
+          {notice && <div className="signin-notice">{notice}</div>}
+          <label className="signin-field">
+            <small>6-digit code</small>
+            <input
+              className="signin-code-input"
+              value={code}
+              onChange={e => setCode(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="one-time-code"
+              placeholder="000000"
+              maxLength={6}
+              autoFocus
+              required
+            />
+          </label>
+          <button className="btn primary signin-btn" type="submit" disabled={busy || code.length !== 6}>
+            {busy ? 'Verifying…' : 'Sign in'}
+          </button>
+          <div className="signin-alt">
+            <button type="button" className="signin-link" onClick={changeEmail}>← Use a different email</button>
+            <button type="button" className="signin-link" onClick={requestCode} disabled={busy}>Resend code</button>
+          </div>
+          {error && <p className="signin-error">{error}</p>}
+        </div>
+      </form>
+    )
+  }
+
   return (
-    <form className="panel" onSubmit={submit} style={{ padding: 20 }}>
-      <div className="panel-head"><h3>Sign in to allocate paper capital</h3><small>DEV LOGIN — email only, no password</small></div>
-      <div className="settings-body">
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <small>Email</small>
-          <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@example.com" required />
+    <form className="panel signin-panel" onSubmit={requestCode}>
+      <div className="panel-head">
+        <h3>Sign in with email</h3>
+        <small>No password — we email you a one-time code</small>
+      </div>
+      <div className="signin-body">
+        <label className="signin-field">
+          <small>Work email</small>
+          <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@example.com" autoComplete="email" autoFocus required />
         </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <small>Display name (optional)</small>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Prospector" />
-        </label>
-        <button className="btn primary" type="submit" disabled={busy}>{busy ? 'signing in…' : 'CONTINUE'}</button>
-        {error && <p className="red" style={{ marginTop: 8 }}>{error}</p>}
+        <button className="btn primary signin-btn" type="submit" disabled={busy || !email}>
+          {busy ? 'Sending code…' : 'Continue with email'}
+        </button>
+        <p className="signin-fine">
+          We'll email a 6-digit code that's valid for 10 minutes. By continuing you agree to receive one-time sign-in codes at this address.
+        </p>
+        {error && <p className="signin-error">{error}</p>}
       </div>
     </form>
   )

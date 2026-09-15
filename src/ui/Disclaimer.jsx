@@ -13,7 +13,7 @@ export function Disclaimer() {
       <div className="disclaimer-footer">
         <ShieldCheck size={11} />
         <span>
-          <b>Every rule, none of the promises.</b> NIGHTWATCH AI is a research workstation, not a broker. Signals are informational; the trader owns every decision. Paper mode only unless you explicitly wire a live account. <em>Not investment advice.</em>
+          <b>Every rule. None of the promises.</b> NIGHTWATCH AI is a research workstation, not a broker. Analysis is informational. The trader makes every decision. Paper mode by default; live execution requires explicit trader approval. <em>Not investment advice.</em>
         </span>
       </div>
       {!ack && (

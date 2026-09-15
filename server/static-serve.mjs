@@ -52,7 +52,7 @@ http.createServer = (handler) => {
 await import('./adapter.mjs')
 http.createServer = originalCreate    // restore
 
-const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer']
+const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer', '/analysis']
 
 function isApi(pathname) { return API_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/')) }
 
@@ -84,7 +84,12 @@ function serveStatic(req, res) {
 
 const server = originalCreate((req, res) => {
   const parsed = new URL(req.url, 'http://x')
-  if (isApi(parsed.pathname)) return apiHandler(req, res)
+  if (isApi(parsed.pathname)) {
+    // Transparently treat HEAD as GET for API endpoints so uptime probes
+    // (Railway, Uptime Robot, etc.) hitting `HEAD /health` don't 404.
+    if (req.method === 'HEAD') req.method = 'GET'
+    return apiHandler(req, res)
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end('method not allowed'); return }
   serveStatic(req, res)
 })

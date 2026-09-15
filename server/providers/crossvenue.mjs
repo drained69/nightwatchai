@@ -12,7 +12,7 @@
  */
 
 import { logger } from '../lib/log.mjs'
-import { getBook as bitgetGetBook, isSupported as bitgetSupported } from './bitget.mjs'
+import { getBook as bitgetGetBook, getTicker as bitgetGetTicker, isSupported as bitgetSupported } from './bitget.mjs'
 
 const CACHE_MS = Number(process.env.CROSS_CACHE_MS || 15_000)
 const TIMEOUT_MS = Number(process.env.CROSS_TIMEOUT_MS || 3500)
@@ -78,9 +78,12 @@ async function bitgetFunding(pair) {
 }
 async function bitgetOi(pair) {
   const body = await fetchJson(`https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${pair}&productType=USDT-FUTURES`)
-  const row = body?.data
-  if (!row) return null
-  return { venue: 'bitget', pair, openInterest: Number(row.amount), ts: Number(row.ts) }
+  const row = body?.data?.openInterestList?.[0]
+  if (!row?.size) return null
+  const openInterest = Number(row.size)
+  // Bitget returns OI in base-asset units. Convert to USD via the current mark price
+  // pulled from the funding-rate endpoint (same request the caller just made in parallel).
+  return { venue: 'bitget', pair, openInterest, ts: Number(body?.data?.ts || Date.now()) }
 }
 
 /* ---------------------------------------------------- Aggregated per asset */
@@ -111,6 +114,21 @@ export async function getPositioning(symbol) {
   const fundingSkew = fRates.length > 1 ? Math.max(...fRates) - Math.min(...fRates) : 0
   const absFunding = meanFunding == null ? 0 : Math.abs(meanFunding)
   const crowding = absFunding > 0.0005 ? 'HIGH' : absFunding > 0.0002 ? 'MED' : 'LOW'
+  // Fill in openInterestUsd for venues that only give base-currency OI.
+  // Prefer Binance's markPrice (accurate); fall back to Bitget spot last-price
+  // (works when Binance is geo-blocked, which is the norm on cloud hosts).
+  let markPrice = bFund?.markPrice ?? null
+  if (!markPrice) {
+    const spot = await bitgetGetTicker(symbol).catch(() => null)
+    if (spot?.last) markPrice = spot.last
+  }
+  if (markPrice) {
+    for (const oi of oiByVenue) {
+      if (oi.openInterestUsd == null && oi.openInterest != null) {
+        oi.openInterestUsd = Number((oi.openInterest * markPrice).toFixed(0))
+      }
+    }
+  }
   const totalOpenInterest = oiByVenue.reduce((s, x) => s + (x.openInterest || 0), 0)
   const totalOpenInterestUsd = oiByVenue.reduce((s, x) => s + (x.openInterestUsd || 0), 0)
 

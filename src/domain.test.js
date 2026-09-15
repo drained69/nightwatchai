@@ -356,10 +356,8 @@ test('pickNextDemoNews rotates deterministically', () => {
   assert.equal(pickNextDemoNews(0).id, pickNextDemoNews(DEMO_NEWS.length).id)
 })
 
-test('initialSession seeds news feed with analyzed items', () => {
+test('initialSession starts with empty news feed — real product hydrates from /news/live', () => {
   const s = initialSession()
-  assert.ok(s.news.length >= 3)
-  for (const item of s.news) {
-    assert.ok(item.analysis && Array.isArray(item.analysis.rows))
-  }
+  assert.deepEqual(s.news, [])
+  assert.deepEqual(s.newsAlerts, [])
 })

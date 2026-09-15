@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" aria-label="NIGHTWATCH AI">
+  <!-- Outer forest-green seal, like an old broker's stamp -->
+  <rect x="1" y="1" width="62" height="62" rx="2" fill="#123528"/>
+  <!-- Inner engraved border, cream, thin -->
+  <rect x="5" y="5" width="54" height="54" rx="1" fill="none" stroke="#efe8d5" stroke-opacity="0.55" stroke-width="0.75"/>
+  <!-- Corner ticks (watchmaker's mark) -->
+  <g stroke="#efe8d5" stroke-opacity="0.65" stroke-width="1" stroke-linecap="square">
+    <path d="M8 3 L8 6"/>  <path d="M56 3 L56 6"/>
+    <path d="M8 58 L8 61"/><path d="M56 58 L56 61"/>
+    <path d="M3 8 L6 8"/>  <path d="M3 56 L6 56"/>
+    <path d="M58 8 L61 8"/><path d="M58 56 L61 56"/>
+  </g>
+  <!-- Crescent moon carved via mask (cream on forest) — upside down, opens toward lower-right -->
+  <mask id="nw-crescent">
+    <rect width="64" height="64" fill="white"/>
+    <circle cx="41" cy="42" r="16" fill="black"/>
+  </mask>
+  <circle cx="30" cy="33" r="17.5" fill="#efe8d5" mask="url(#nw-crescent)"/>
+  <!-- Four-point star at the notch, amber gilt -->
+  <g fill="#a37528">
+    <path d="M46 48 L46.9 45.9 L49 45 L46.9 44.1 L46 42 L45.1 44.1 L43 45 L45.1 45.9 Z"/>
+  </g>
+  <!-- Watchtower ligature dot at the apex — signals "AI" observer -->
+  <circle cx="32" cy="11" r="1.6" fill="#a5232a"/>
+</svg>

@@ -33,7 +33,7 @@ import { logger } from './lib/log.mjs'
 import { makeRateLimiter, enforce } from './lib/ratelimit.mjs'
 import { makeSseBus } from './lib/sse.mjs'
 import { makeLlm } from './lib/llm.mjs'
-import { requireAuth, devLogin } from './lib/auth.mjs'
+import { requireAuth, devLogin, signup, login, publicUser, requestSignInCode, verifySignInCode } from './lib/auth.mjs'
 import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './lib/store.mjs'
 import { getAllTickers, getTicker, computeIndicators } from './providers/bitget.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
@@ -392,6 +392,66 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, m)
     }
 
+    // Analysis workbench — single call that bundles every Bitget-native primitive
+    // (ticker, indicators, book depth, cross-venue positioning) with the macro
+    // tape, symbol-filtered news, and a Qwen-authored synthesis. This is what
+    // the Analysis tab renders.
+    if (route.startsWith('GET /analysis/')) {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const symbol = url.pathname.split('/').pop().toUpperCase()
+      const [ticker, indicators, depth, positioning, intel, macro] = await Promise.all([
+        getTicker(symbol).catch(() => null),
+        computeIndicators(symbol).catch(() => null),
+        getSpotBookDepth(symbol).catch(() => null),
+        getPositioning(symbol).catch(() => null),
+        getMarketIntelSnapshot(symbol).catch(() => null),
+        getMacro().catch(() => null),
+      ])
+      if (!ticker && !indicators) return json(res, 404, { error: `no live data for ${symbol}` })
+      // Filter recent news to items that reference this symbol in their affectedAssets.
+      const newsItems = news.list(80).filter(it =>
+        (it.affectedAssets || []).some(a => a.symbol === symbol)
+      ).slice(0, 8)
+      // Ask Qwen for a 3-paragraph desk analysis. All facts stay grounded in the
+      // real numbers above. LLM is optional — the client still renders every
+      // fact panel if the synthesis field is null.
+      let synthesis = null
+      if (llm.enabled) {
+        try {
+          metrics.llm_calls++
+          const facts = {
+            symbol,
+            price: ticker?.last, changePct24h: ticker?.changePct24h,
+            spreadBps: depth?.spreadBps, depthImbalance: depth?.depthImbalance,
+            bidLiquidityUsd: depth?.bidLiquidityUsd, askLiquidityUsd: depth?.askLiquidityUsd,
+            rsi14: indicators?.rsi14, ema20: indicators?.ema20, ema50: indicators?.ema50,
+            trend: indicators?.trend, support: indicators?.support, resistance: indicators?.resistance,
+            atrPct: indicators?.atrPct, volumeZ: indicators?.volumeZ, change7d: indicators?.change7d,
+            fundingRate: positioning?.meanFundingRate, openInterest: positioning?.openInterestUsd,
+            fearGreed: intel?.fearGreed?.value, fearGreedClass: intel?.fearGreed?.classification,
+            dxy: macro?.dxy?.last, vix: macro?.vix?.last, cryptoRegime: macro?.cryptoRegime, riskRegime: macro?.riskRegime,
+            recentNews: newsItems.slice(0, 5).map(it => ({ headline: it.headline, source: it.source, severity: it.severity })),
+          }
+          const prompt = `You are NIGHTWATCH AI, a professional trading desk analyst. Given ONLY the JSON facts below about ${symbol}, produce a JSON response {"headline": string, "technical": string, "flow": string, "narrative": string, "verdict": "LONG"|"SHORT"|"SIT_OUT", "confidence": number 0..1, "entry": number|null, "stop": number|null, "target": number|null, "invalidation": string}. Keep each string one crisp sentence. Do not invent numbers not in the facts. Ground every claim in the facts.\n\nFACTS: ${JSON.stringify(facts)}`
+          const out = await llm.jsonComplete(prompt)
+          if (out && typeof out === 'object') synthesis = out
+        } catch (err) { logger.warn({ err: err.message, symbol }, 'analysis synthesis failed') }
+      }
+      return json(res, 200, {
+        symbol,
+        at: Date.now(),
+        ticker,
+        indicators,
+        depth,
+        positioning,
+        intel: intel ? { fearGreed: intel.fearGreed, etfFlows: intel.etfFlows } : null,
+        macro: macro ? { dxy: macro.dxy, vix: macro.vix, cryptoRegime: macro.cryptoRegime, riskRegime: macro.riskRegime, live: macro.live } : null,
+        news: newsItems,
+        synthesis,
+        engine: synthesis ? llm.provider.toUpperCase() : 'LOCAL',
+      })
+    }
+
     // Public signal history + accuracy scoreboard
     if (route === 'GET /signals/history') {
       const limit = Math.min(500, Number(url.searchParams.get('limit') || 100))
@@ -645,10 +705,48 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, reply)
     }
 
-    // Auth
+    // Auth — passwordless email sign-in (like getagent.studio)
+    // Step 1: user enters email, we send a 6-digit code.
+    // Step 2: user enters the code, we return a JWT. First-time users are
+    // created transparently on successful verification.
+    if (route === 'POST /auth/request-code') {
+      if (!enforce(rateAuth, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const out = await requestSignInCode({ email: body?.email })
+        return json(res, 200, out)
+      } catch (err) { return json(res, 400, { error: err.message }) }
+    }
+    if (route === 'POST /auth/verify-code') {
+      if (!enforce(rateAuth, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const out = await verifySignInCode({ email: body?.email, code: body?.code, name: body?.name })
+        return json(res, 200, out)
+      } catch (err) { return json(res, 401, { error: err.message }) }
+    }
+    // Legacy password auth — kept temporarily for accounts already provisioned
+    // this way. New sign-ins go through /auth/request-code + /auth/verify-code.
+    if (route === 'POST /auth/signup') {
+      if (!enforce(rateAuth, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const out = await signup({ email: body?.email, password: body?.password, name: body?.name })
+        return json(res, 200, out)
+      } catch (err) { return json(res, 400, { error: err.message }) }
+    }
+    if (route === 'POST /auth/login') {
+      if (!enforce(rateAuth, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const out = await login({ email: body?.email, password: body?.password })
+        return json(res, 200, out)
+      } catch (err) { return json(res, 401, { error: err.message }) }
+    }
+    // Legacy dev-login — DEV ONLY. Off in production unless explicitly opted in.
     if (route === 'POST /auth/dev-login') {
       if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_LOGIN !== '1') {
-        return json(res, 403, { error: 'dev login disabled in production; set ALLOW_DEV_LOGIN=1 to override' })
+        return json(res, 403, { error: 'dev login disabled; use /auth/signup or /auth/login' })
       }
       if (!enforce(rateAuth, req, res, () => {}, keyFor)) return
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
@@ -661,12 +759,12 @@ const server = http.createServer(async (req, res) => {
     // Session
     if (route === 'GET /session') {
       const user = requireAuth(req, res); if (!user) return
-      return json(res, 200, { user, session: loadSessionFor(user.id) })
+      return json(res, 200, { user: publicUser(user), session: loadSessionFor(user.id) })
     }
     if (route === 'PATCH /session') {
       const user = requireAuth(req, res); if (!user) return
       let patch; try { patch = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
-      return json(res, 200, { user, session: patchSessionFor(user.id, patch) })
+      return json(res, 200, { user: publicUser(user), session: patchSessionFor(user.id, patch) })
     }
 
     // Web Push subscription (endpoint stored; delivery in DEPLOYMENT.md)

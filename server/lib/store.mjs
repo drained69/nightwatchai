@@ -79,15 +79,22 @@ export function loadSessionFor(userId) {
   }
 }
 export function patchSessionFor(userId, patch) {
-  if (patch.watchlist)   saveCollection(userId, 'watchlist',   patch.watchlist)
-  if (patch.preferences) saveCollection(userId, 'preferences', patch.preferences)
-  if (patch.reports)     saveCollection(userId, 'reports',     patch.reports.slice(0, 200))
-  if (patch.signals)     saveCollection(userId, 'signals',     patch.signals.slice(0, 200))
-  if (patch.theses)      saveCollection(userId, 'theses',      patch.theses.slice(0, 100))
-  if (patch.positions)   saveCollection(userId, 'positions',   patch.positions)
-  if (patch.decisions)   saveCollection(userId, 'decisions',   patch.decisions.slice(0, 500))
-  if (patch.reviews)     saveCollection(userId, 'reviews',     patch.reviews.slice(0, 200))
-  if (patch.newsAlerts)  saveCollection(userId, 'newsAlerts',  patch.newsAlerts.slice(0, 50))
+  // Clients send unvalidated JSON — only persist well-shaped fields, capped,
+  // so a malformed PATCH can't corrupt the stored session or fill the disk.
+  const p = patch && typeof patch === 'object' ? patch : {}
+  const arr = (v, cap) => Array.isArray(v) ? v.slice(0, cap) : null
+  const wl = arr(p.watchlist, 100)
+  if (wl) saveCollection(userId, 'watchlist', wl.map(String))
+  if (p.preferences && typeof p.preferences === 'object' && !Array.isArray(p.preferences)) {
+    saveCollection(userId, 'preferences', p.preferences)
+  }
+  const reports = arr(p.reports, 200);       if (reports)   saveCollection(userId, 'reports', reports)
+  const signals = arr(p.signals, 200);       if (signals)   saveCollection(userId, 'signals', signals)
+  const theses  = arr(p.theses, 100);        if (theses)    saveCollection(userId, 'theses', theses)
+  const positions = arr(p.positions, 500);   if (positions) saveCollection(userId, 'positions', positions)
+  const decisions = arr(p.decisions, 500);   if (decisions) saveCollection(userId, 'decisions', decisions)
+  const reviews = arr(p.reviews, 200);       if (reviews)   saveCollection(userId, 'reviews', reviews)
+  const alerts  = arr(p.newsAlerts, 50);     if (alerts)    saveCollection(userId, 'newsAlerts', alerts)
   return loadSessionFor(userId)
 }
 

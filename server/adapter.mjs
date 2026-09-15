@@ -38,6 +38,7 @@ import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './
 import { getAllTickers, getTicker, computeIndicators } from './providers/bitget.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
 import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
+import { getEarningsFor, getUpcomingEarnings, EQUITY_UNIVERSE as EARNINGS_UNIVERSE } from './providers/earnings.mjs'
 import { makeNewsStore, FEEDS } from './providers/news.mjs'
 import { liveEnhanceArtifact } from './live-enhance.mjs'
 import { warmHistory, loadHistory, historyStatus, SUPPORTED as HISTORY_SUPPORTED } from './history.mjs'
@@ -173,11 +174,25 @@ news.subscribe(item => {
 
 // Price tick loop → SSE.
 setInterval(async () => {
-  const tickers = await getAllTickers()
-  if (!tickers) return
-  metrics.price_ticks++
-  priceBus.emit({ type: 'prices', data: { at: Date.now(), tickers } })
+  try {
+    const tickers = await getAllTickers()
+    if (!tickers) return
+    metrics.price_ticks++
+    priceBus.emit({ type: 'prices', data: { at: Date.now(), tickers } })
+  } catch (err) {
+    // An escaping rejection here would crash the whole process (Node ≥15 default).
+    logger.warn({ err: err.message }, 'price tick failed')
+  }
 }, PRICES_TICK_MS).unref?.()
+
+// Last-resort guards: a stray rejection from any fire-and-forget async path
+// (push delivery, provider fetches, timers) must log, not kill the server.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason instanceof Error ? reason.message : String(reason) }, 'unhandled rejection')
+})
+process.on('uncaughtException', (err) => {
+  logger.error({ err: err.message, stack: err.stack }, 'uncaught exception')
+})
 
 /* -------------------------------------------------- HTTP helpers */
 
@@ -200,6 +215,11 @@ async function readJson(req, limitBytes = 512 * 1024) {
   if (!raw) return {}
   try { return JSON.parse(raw) } catch { throw new Error('invalid json') }
 }
+/** Parse a ?limit= query param: garbage/NaN falls back to the default, never NaN. */
+function limitParam(raw, dflt, max) {
+  const n = Math.floor(Number(raw))
+  return Number.isFinite(n) && n > 0 ? Math.min(max, n) : dflt
+}
 function keyFor(req) {
   const auth = req.headers.authorization
   if (auth?.startsWith('Bearer ')) return 'jwt:' + auth.slice(7, 32)
@@ -209,22 +229,43 @@ function keyFor(req) {
 /* -------------------------------------------------- narration rewrite for reports */
 
 async function narrateReport(artifact, question) {
-  if (!artifact?.report || !llm.enabled) return { artifact, engine: 'LOCAL' }
+  if (!artifact?.report) return { artifact, engine: 'LOCAL' }
   const r = artifact.report
-  const prompt = `You are NIGHTWATCH AI, a professional trading research desk. Rewrite these fields in crisp, professional trader English. Do NOT change any numbers, tickers, verdicts, or invalidation prices. Return JSON: {"summary": string, "reasoning": string}.
+  // Deterministic short/long thesis fallback so the downloadable card always
+  // has content even when the LLM is off or times out.
+  const fallbackShort = r.signal?.catalyst
+    ? `Near term: ${r.signal.catalyst} drives the ${(r.signal.direction || 'FLAT').toLowerCase()} setup at ${(r.signal.confidence * 100).toFixed(0)}% confidence.`
+    : `Near term: ${(r.signal.direction || 'FLAT').toLowerCase()} bias at ${(r.signal.confidence * 100).toFixed(0)}% confidence, net edge ${(r.signal.netEdge * 100).toFixed(2)}%.`
+  const fallbackLong = `Multi-week: watch macro regime and ${r.symbol} structural drivers; invalidate below the price and conditions listed in the invalidation section.`
+  const nextBase = structuredClone(artifact)
+  nextBase.report.thesis = nextBase.report.thesis || { short: fallbackShort, long: fallbackLong }
+
+  if (!llm.enabled) return { artifact: nextBase, engine: 'LOCAL' }
+
+  const prompt = `You are NIGHTWATCH AI, a professional trading research desk. Rewrite the summary and reasoning in crisp, professional trader English, and produce two distinct-horizon thesis lines. Do NOT change any numbers, tickers, verdicts, or invalidation prices. Return JSON:
+{
+  "summary": string,        // 2 sentences max, crisp desk voice
+  "reasoning": string,      // 1 sentence, why the composite/edge came out this way
+  "shortThesis": string,    // Near-term (hours to days): the immediate catalyst, tape read, and event risk. 1 sentence.
+  "longThesis": string      // Multi-week to multi-month: the structural driver, macro fit, and what would invalidate the longer thesis. 1 sentence.
+}
 
 Question: ${question || ''}
 Symbol: ${r.symbol}
 Direction: ${r.signal.direction} · confidence ${(r.signal.confidence * 100).toFixed(0)}%
 Net edge: ${(r.signal.netEdge * 100).toFixed(2)}%
+Catalyst: ${r.signal.catalyst || ''}
 Original summary: ${r.summary}
-Original reasoning: ${r.signal.reason}`
+Original reasoning: ${r.signal.reason}
+Invalidation price: ${r.invalidation?.price || 'n/a'}`
   metrics.llm_calls++
   const out = await llm.jsonComplete(prompt)
-  if (!out) return { artifact, engine: 'LOCAL' }
-  const next = structuredClone(artifact)
-  if (out.summary)   next.report.summary       = String(out.summary).slice(0, 800)
-  if (out.reasoning) next.report.signal.reason = String(out.reasoning).slice(0, 500)
+  if (!out) return { artifact: nextBase, engine: 'LOCAL' }
+  const next = nextBase
+  if (out.summary)      next.report.summary          = String(out.summary).slice(0, 800)
+  if (out.reasoning)    next.report.signal.reason    = String(out.reasoning).slice(0, 500)
+  if (out.shortThesis)  next.report.thesis.short     = String(out.shortThesis).slice(0, 400)
+  if (out.longThesis)   next.report.thesis.long      = String(out.longThesis).slice(0, 400)
   return { artifact: next, engine: llm.provider.toUpperCase() }
 }
 
@@ -306,7 +347,7 @@ const server = http.createServer(async (req, res) => {
     // News
     if (route === 'GET /news/live') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
-      const limit = Math.min(200, Number(url.searchParams.get('limit') || 60))
+      const limit = limitParam(url.searchParams.get('limit'), 60, 200)
       return json(res, 200, { items: news.list(limit), count: news._items.length, live: true })
     }
     if (route === 'GET /news/stream') {
@@ -316,7 +357,9 @@ const server = http.createServer(async (req, res) => {
       return close
     }
     if (route === 'POST /news/ingest') {
-      // Manual force-poll trigger for tests + admin.
+      // Manual force-poll trigger for tests + admin. Fans out to every RSS feed
+      // — rate-limit so anonymous callers can't use us as an amplification proxy.
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
       const added = await news.pollAll()
       return json(res, 200, { added, total: news._items.length })
     }
@@ -392,6 +435,21 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, m)
     }
 
+    // US-equity earnings calendar — free Yahoo Finance quoteSummary, cached 12h.
+    if (route === 'GET /earnings') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const limit = Math.min(20, Number(url.searchParams.get('limit') || 5))
+      const rows = await getUpcomingEarnings({ limit }).catch(() => [])
+      return json(res, 200, { rows, universe: EARNINGS_UNIVERSE, at: Date.now() })
+    }
+    if (route.startsWith('GET /earnings/')) {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const symbol = url.pathname.split('/').pop().toUpperCase()
+      const e = await getEarningsFor(symbol)
+      if (!e) return json(res, 404, { error: `no earnings calendar for ${symbol}` })
+      return json(res, 200, e)
+    }
+
     // Analysis workbench — single call that bundles every Bitget-native primitive
     // (ticker, indicators, book depth, cross-venue positioning) with the macro
     // tape, symbol-filtered news, and a Qwen-authored synthesis. This is what
@@ -399,13 +457,16 @@ const server = http.createServer(async (req, res) => {
     if (route.startsWith('GET /analysis/')) {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
       const symbol = url.pathname.split('/').pop().toUpperCase()
-      const [ticker, indicators, depth, positioning, intel, macro] = await Promise.all([
+      const [ticker, indicators, depth, positioning, intel, macro, earnings] = await Promise.all([
         getTicker(symbol).catch(() => null),
         computeIndicators(symbol).catch(() => null),
         getSpotBookDepth(symbol).catch(() => null),
         getPositioning(symbol).catch(() => null),
         getMarketIntelSnapshot(symbol).catch(() => null),
         getMacro().catch(() => null),
+        // Earnings only meaningful for tokenized equities (Yahoo has no coverage for R-pairs directly;
+        // we key off the underlying ticker which matches for NVDA/TSLA/AAPL etc.).
+        EARNINGS_UNIVERSE.includes(symbol) ? getEarningsFor(symbol).catch(() => null) : Promise.resolve(null),
       ])
       if (!ticker && !indicators) return json(res, 404, { error: `no live data for ${symbol}` })
       // Filter recent news to items that reference this symbol in their affectedAssets.
@@ -446,6 +507,7 @@ const server = http.createServer(async (req, res) => {
         positioning,
         intel: intel ? { fearGreed: intel.fearGreed, etfFlows: intel.etfFlows } : null,
         macro: macro ? { dxy: macro.dxy, vix: macro.vix, cryptoRegime: macro.cryptoRegime, riskRegime: macro.riskRegime, live: macro.live } : null,
+        earnings,
         news: newsItems,
         synthesis,
         engine: synthesis ? llm.provider.toUpperCase() : 'LOCAL',
@@ -454,7 +516,7 @@ const server = http.createServer(async (req, res) => {
 
     // Public signal history + accuracy scoreboard
     if (route === 'GET /signals/history') {
-      const limit = Math.min(500, Number(url.searchParams.get('limit') || 100))
+      const limit = limitParam(url.searchParams.get('limit'), 100, 500)
       return json(res, 200, { signals: SignalHistory.list(limit), stats: SignalHistory.stats() })
     }
     if (route === 'GET /signals/stats') {
@@ -469,12 +531,14 @@ const server = http.createServer(async (req, res) => {
       const symbol = url.pathname.split('/').pop().toUpperCase()
       const h = loadHistory(symbol)
       if (!h) return json(res, 404, { error: `no history for ${symbol}` })
-      const limit = Math.min(h.candles.length, Number(url.searchParams.get('limit') || 2000))
+      const limit = Math.min(h.candles.length, limitParam(url.searchParams.get('limit'), 2000, h.candles.length))
       return json(res, 200, { symbol: h.symbol, count: h.candles.length, updatedAt: h.updatedAt, candles: h.candles.slice(-limit) })
     }
 
     // Backtest against cached historical candles
     if (route === 'POST /backtest/live') {
+      // CPU-heavy synchronous replay — keep anonymous callers from pinning the loop.
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
       const symbol = String(body.symbol || 'BTC').toUpperCase()
       const h = loadHistory(symbol)
@@ -483,6 +547,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { symbol, candleCount: h.candles.length, ...result })
     }
     if (route === 'POST /history/warm') {
+      // Paginates every supported symbol against the public API — rate-limit.
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
       const results = await warmHistory()
       return json(res, 200, { results, cache: historyStatus() })
     }
@@ -619,7 +685,7 @@ const server = http.createServer(async (req, res) => {
 
     // Playbooks
     if (route === 'GET /playbooks') {
-      const limit = Math.min(200, Number(url.searchParams.get('limit') || 50))
+      const limit = limitParam(url.searchParams.get('limit'), 50, 200)
       return json(res, 200, { playbooks: Playbooks.listPlaybooks({ publishedOnly: true, limit }) })
     }
     if (route === 'GET /playbooks/mine') {
@@ -694,12 +760,14 @@ const server = http.createServer(async (req, res) => {
     // Leaderboard
     if (route === 'GET /leaderboard') {
       const sort = url.searchParams.get('sort') || 'return'
-      const limit = Math.min(100, Number(url.searchParams.get('limit') || 25))
+      const limit = limitParam(url.searchParams.get('limit'), 25, 100)
       return json(res, 200, { rows: playbookLeaderboard({ sort, limit }) })
     }
 
     // The Assayer chat
     if (route === 'POST /assayer/chat') {
+      // Unauthenticated LLM calls — rate-limit or anyone can burn the API budget.
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
       const reply = await assayerChat({ messages: Array.isArray(body?.messages) ? body.messages.slice(-16) : [], llm })
       return json(res, 200, reply)
@@ -773,6 +841,21 @@ const server = http.createServer(async (req, res) => {
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
       if (!body?.endpoint) return json(res, 400, { error: 'endpoint required' })
       savePushSubscription(user.id, body)
+      return json(res, 200, { ok: true })
+    }
+
+    // Client-side crash telemetry (see src/ui/ErrorBoundary.jsx). Fire-and-forget
+    // from the browser; logged server-side, hard-capped and rate-limited.
+    if (route === 'POST /errors') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req, 16 * 1024) } catch { return json(res, 400, { error: 'invalid json' }) }
+      logger.error({
+        message: String(body?.message || '').slice(0, 500),
+        stack: String(body?.stack || '').slice(0, 4000),
+        componentStack: String(body?.componentStack || '').slice(0, 2000),
+        url: String(body?.url || '').slice(0, 300),
+        clientAt: body?.at,
+      }, 'client error boundary')
       return json(res, 200, { ok: true })
     }
 

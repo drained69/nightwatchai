@@ -28,6 +28,26 @@ const NEWS_KEEP_MAX   = Number(process.env.NEWS_KEEP_MAX   || 120)
  */
 const SEC_UA = process.env.SEC_USER_AGENT || 'NightwatchAI Research admin@nightwatch.local'
 
+// SEC EDGAR CIKs for the 10 tokenized-equity universe symbols. Used to build
+// per-company Form 4 (insider transaction) feeds so we actually catch filings
+// on the names our users trade — the global Form 4 firehose is 99% unrelated.
+const EQUITY_CIK = {
+  NVDA:  '0001045810', TSLA:  '0001318605', AAPL:  '0000320193', MSFT:  '0000789019',
+  AMZN:  '0001018724', GOOGL: '0001652044', META:  '0001326801', AMD:   '0000002488',
+  COIN:  '0001679788', MSTR:  '0001050446',
+}
+function form4FeedFor(symbol) {
+  const cik = EQUITY_CIK[symbol]
+  return {
+    id: `sec-form4-${symbol.toLowerCase()}`,
+    name: `SEC Form 4 · ${symbol}`,
+    url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=4&dateb=&owner=include&count=10&output=atom`,
+    kind: 'insider',
+    ua: SEC_UA,
+    forceSymbol: symbol,   // classifier hint — SEC titles include only the reporting person, not the company ticker
+  }
+}
+
 export const FEEDS = [
   { id: 'coindesk',    name: 'CoinDesk',      url: 'https://www.coindesk.com/arc/outboundfeeds/rss', kind: 'crypto' },
   { id: 'theblock',    name: 'The Block',     url: 'https://www.theblock.co/rss.xml',                kind: 'crypto' },
@@ -35,6 +55,8 @@ export const FEEDS = [
   { id: 'sec-8k',      name: 'SEC 8-K',       url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom', kind: 'equity', ua: SEC_UA },
   { id: 'yahoo-fin',   name: 'Yahoo Finance', url: 'https://finance.yahoo.com/news/rssindex',        kind: 'equity' },
   { id: 'cnbc-top',    name: 'CNBC',          url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114', kind: 'macro' },
+  // Per-ticker SEC Form 4 insider transactions for our tokenized-equity universe.
+  ...Object.keys(EQUITY_CIK).map(form4FeedFor),
 ]
 
 /* ------------------------------------------------------------ RSS parser */
@@ -50,6 +72,14 @@ function pick(xml, tag) {
   const m = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\/${tag}>`))
   return m ? decodeXml(m[1]).trim() : ''
 }
+/** Only accept http(s) links from feeds — a javascript:/data: URL in an RSS
+ *  item would reach the client's <a href> and execute in the app origin. */
+function isSafeHttpUrl(u) {
+  try {
+    const p = new URL(String(u ?? '').trim())
+    return p.protocol === 'http:' || p.protocol === 'https:'
+  } catch { return false }
+}
 export function parseRss(xml) {
   if (!xml) return []
   // Support RSS 2.0 <item> and Atom <entry>.
@@ -64,7 +94,7 @@ export function parseRss(xml) {
     const description = pick(block, kind === 'atom' ? 'summary' : 'description') || pick(block, 'content')
     const pub = pick(block, kind === 'atom' ? 'updated' : 'pubDate') || pick(block, 'published')
     return { title: stripHtml(title), link, description: stripHtml(description), publishedAt: pub ? new Date(pub).toISOString() : new Date().toISOString() }
-  }).filter(r => r.title && r.link)
+  }).filter(r => r.title && isSafeHttpUrl(r.link))
 }
 
 async function fetchText(url, ua = 'NightwatchAI/1.1 (news-ingester; +https://github.com)') {
@@ -252,21 +282,32 @@ export function makeNewsStore({ llm } = {}) {
     if (seen.has(hash)) return null
     seen.add(hash)
 
-    // Cross-source dedup: if we've already seen this event from another source, add citation.
-    const twin = findCrossSourceMatch(raw)
-    if (twin) {
-      twin.citations = twin.citations || [{ source: twin.source, url: twin.url }]
-      if (!twin.citations.some(c => c.url === raw.link)) {
-        twin.citations.push({ source: feed.name, url: raw.link })
+    // Cross-source dedup: skip for insider feeds — every SEC Form 4 has the
+    // generic title "4 - Statement of changes in beneficial ownership of
+    // securities", which would collapse every filing across every ticker into
+    // one item.
+    if (feed.kind !== 'insider') {
+      const twin = findCrossSourceMatch(raw)
+      if (twin) {
+        twin.citations = twin.citations || [{ source: twin.source, url: twin.url }]
+        if (!twin.citations.some(c => c.url === raw.link)) {
+          twin.citations.push({ source: feed.name, url: raw.link })
+        }
+        subscribers.forEach(fn => { try { fn(twin) } catch { /* ignore */ } })
+        return null
       }
-      subscribers.forEach(fn => { try { fn(twin) } catch { /* ignore */ } })
-      return null
     }
+
+    // Insider feeds: rewrite the generic SEC title into something a trader can
+    // actually read at a glance.
+    const displayHeadline = feed.forceSymbol
+      ? `${feed.forceSymbol} · insider transaction filed (SEC Form 4)`
+      : raw.title
 
     const item = {
       id: `news-live-${hash}`,
       hash,
-      headline: raw.title,
+      headline: displayHeadline,
       detail: raw.description?.slice(0, 400) || raw.title,
       source: feed.name,
       feedId: feed.id,
@@ -278,10 +319,17 @@ export function makeNewsStore({ llm } = {}) {
       citations: [{ source: feed.name, url: raw.link }],
     }
     const classified = (await llmClassify(item, llm)) || heuristicClassify(item)
-    item.category      = classified.category
-    item.severity      = classified.severity
+    item.category      = feed.kind === 'insider' ? 'insider' : classified.category
+    item.severity      = feed.kind === 'insider' ? 'MEDIUM' : classified.severity
     item.regimeShift   = classified.regimeShift
     item.affectedAssets = classified.affectedAssets
+    // Per-CIK feeds always target one ticker — override the classifier so the
+    // item tags the right symbol even when the title only names the insider.
+    if (feed.forceSymbol && !item.affectedAssets.some(a => a.symbol === feed.forceSymbol)) {
+      // Direction from the raw title: "Reporting" alone is neutral; SEC titles
+      // don't disclose buy/sell in the title, only in the underlying form.
+      item.affectedAssets = [{ symbol: feed.forceSymbol, direction: 'MIXED', magnitude: 0.3, reasoning: `Insider transaction (SEC Form 4) filed for ${feed.forceSymbol}.` }, ...item.affectedAssets]
+    }
     // Drop items that touch no assets in our universe (noise).
     if (item.affectedAssets.length === 0) return null
     items.unshift(item)
@@ -303,8 +351,11 @@ export function makeNewsStore({ llm } = {}) {
   }
 
   async function pollAll() {
-    let total = 0
-    for (const feed of FEEDS) total += await pollFeed(feed)
+    // Parallelize across all feeds so one slow / hanging source doesn't block
+    // the rest (SEC EDGAR can be sluggish; each feed already has its own
+    // per-request timeout via NEWS_TIMEOUT_MS).
+    const counts = await Promise.all(FEEDS.map(f => pollFeed(f).catch(() => 0)))
+    const total = counts.reduce((s, n) => s + (n || 0), 0)
     if (total > 0) logger.info({ ingested: total }, 'news ingested')
     return total
   }

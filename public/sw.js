@@ -13,7 +13,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url)
   // Keep in sync with API_PREFIXES in server/static-serve.mjs — all API JSON
   // is network-first; live data must never be served from the static cache.
-  const isApi = /^\/(health|metrics|bitget|prices|news|research|desk|auth|session|push|positioning|book|marketintel|macro|signals|history|backtest|share|alerts|trading|copilot|vapid|paper|playbooks|leaderboard|assayer)(\/|$|\?)/.test(url.pathname)
+  const isApi = /^\/(health|metrics|bitget|prices|news|research|desk|auth|session|push|positioning|book|marketintel|macro|signals|history|backtest|share|alerts|trading|copilot|vapid|paper|playbooks|leaderboard|assayer|analysis|errors)(\/|$|\?)/.test(url.pathname)
   if (isApi) {
     // network-first, no cache for live data
     e.respondWith(fetch(e.request).catch(() => new Response(JSON.stringify({ error: 'offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } })))
@@ -38,7 +38,7 @@ self.addEventListener('fetch', (e) => {
       caches.open(CACHE).then(c => c.put(e.request, clone))
     }
     return res
-  }).catch(() => caches.match('./'))))
+  })))
 })
 
 /* Web Push handler */

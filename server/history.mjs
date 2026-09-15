@@ -24,17 +24,28 @@ const SUPPORTED = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA',
                    'NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'COIN', 'MSTR']
   .filter(isSupported)
 
-function file(symbol) { return path.join(HISTORY_DIR, `${symbol}.json`) }
+// Symbols come from user-controlled paths/bodies — reject anything that could
+// escape HISTORY_DIR (path separators, dot segments) before touching the fs.
+const SYMBOL_RE = /^[A-Z0-9][A-Z0-9.\-]{0,19}$/
+function file(symbol) {
+  if (!SYMBOL_RE.test(String(symbol ?? ''))) return null
+  return path.join(HISTORY_DIR, `${symbol}.json`)
+}
 
 fs.mkdirSync(HISTORY_DIR, { recursive: true })
 
 export function loadHistory(symbol) {
-  try { return JSON.parse(fs.readFileSync(file(symbol), 'utf8')) } catch { return null }
+  try {
+    const f = file(symbol)
+    return f ? JSON.parse(fs.readFileSync(f, 'utf8')) : null
+  } catch { return null }
 }
 
 function saveHistory(symbol, candles, meta = {}) {
+  const f = file(symbol)
+  if (!f) return null
   const payload = { symbol, updatedAt: new Date().toISOString(), count: candles.length, ...meta, candles }
-  fs.writeFileSync(file(symbol), JSON.stringify(payload))
+  fs.writeFileSync(f, JSON.stringify(payload))
   return payload
 }
 

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 // Dev-mode API proxy: same-origin fetches from the SPA are forwarded to the
 // adapter (npm run server, port 8787). Keep the prefix list in sync with
 // API_PREFIXES in server/static-serve.mjs.
-const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer']
+const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer', '/analysis', '/errors']
 
 export default defineConfig({
   plugins: [react()],

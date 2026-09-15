@@ -13,7 +13,7 @@ export function Disclaimer() {
       <div className="disclaimer-footer">
         <ShieldCheck size={11} />
         <span>
-          <b>Every rule. None of the promises.</b> NIGHTWATCH AI is a research workstation, not a broker. Analysis is informational. The trader makes every decision. Paper mode by default; live execution requires explicit trader approval. <em>Not investment advice.</em>
+          <b>NIGHTWATCH AI is a research tool — not a broker, exchange or investment advisor.</b> Analysis is informational only and does not constitute a solicitation, recommendation, or offer to buy or sell any asset. Market data is provided by Bitget and third-party sources and may be delayed, incomplete or incorrect. Paper trading by default; live order routing is disabled unless explicitly enabled by the account holder. Past performance does not guarantee future results. <em>Not investment, legal or tax advice.</em>
         </span>
       </div>
       {!ack && (
@@ -24,13 +24,13 @@ export function Disclaimer() {
               <button className="icon-btn" onClick={() => setAck(true)} aria-label="Close"><X size={16} /></button>
             </div>
             <ul>
-              <li><b>Not investment advice.</b> AI-generated research is informational. It does not account for your personal situation, tax status, or risk tolerance.</li>
-              <li><b>Paper trading only by default.</b> No live orders are routed unless you provision a real broker adapter and explicitly approve each trade.</li>
-              <li><b>Data may be delayed or wrong.</b> Live prices come from public Bitget endpoints. News comes from public RSS. Both can be stale, dropped, or incorrectly classified.</li>
-              <li><b>Jurisdiction.</b> Not all products/features are available in every jurisdiction. Bitget's geographical restrictions apply. Consult local law before trading.</li>
-              <li><b>You are responsible for your trades.</b> Approve, reject, or sit out — NIGHTWATCH will not act without you.</li>
+              <li><b>Not investment advice.</b> AI-generated research is informational only and does not account for your financial situation, tax status, jurisdiction or risk tolerance. Consult a licensed advisor before making investment decisions.</li>
+              <li><b>Paper trading by default.</b> Live order routing is disabled unless the account holder explicitly enables it and provisions a real broker connection. Each order still requires manual approval.</li>
+              <li><b>Data may be delayed or incorrect.</b> Market data is sourced from Bitget and third-party APIs. News is aggregated from public RSS feeds and automatically classified. Any field may be stale, dropped or misclassified without warning.</li>
+              <li><b>Regional availability.</b> Products, features and asset listings vary by jurisdiction and are subject to Bitget's geographical restrictions. Verify local eligibility and applicable law before trading.</li>
+              <li><b>You are responsible for your trades.</b> NIGHTWATCH will never open, close, or modify a position without your explicit approval.</li>
             </ul>
-            <button className="btn primary" onClick={() => setAck(true)}>I UNDERSTAND · CONTINUE</button>
+            <button className="btn primary" onClick={() => setAck(true)}>I understand — continue</button>
           </div>
         </div>
       )}

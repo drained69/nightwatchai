@@ -29,17 +29,7 @@ export const INTENTS = ['research', 'thesis-test', 'portfolio-impact', 'executio
 /** @typedef {{ symbol: string, name: string, class: 'crypto'|'tokenized-equity', sector: string, price: number, change24h: number, change7d: number, marketCap: number, momentum: 'HIGH'|'MED'|'LOW', volatility: 'HIGH'|'MED'|'LOW', liquidity: 'HIGH'|'MED'|'LOW', beta: number, event?: string, atrPct: number }} MarketRow */
 
 export const DEMO_UNIVERSE = [
-  // Crypto majors — seed prices calibrated to the real tape (2026-09-14).
-  // In live mode the adapter/SSE overrides every row with real Bitget prices.
-  { symbol: 'BTC',   name: 'Bitcoin',      class: 'crypto',           sector: 'Store of value', price: 77800, change24h:  1.3, change7d:  3.1, marketCap: 1550000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.00, event: 'ETF flows',        atrPct: 2.6 },
-  { symbol: 'ETH',   name: 'Ethereum',     class: 'crypto',           sector: 'Smart contract', price:   2508, change24h:  1.2, change7d:  2.4, marketCap:  303000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.18, event: 'Staking flows',    atrPct: 3.1 },
-  { symbol: 'SOL',   name: 'Solana',     class: 'crypto',           sector: 'Smart contract', price:    102, change24h:  1.9, change7d:  4.4, marketCap:   55000000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.45, event: 'Firedancer',       atrPct: 4.8 },
-  { symbol: 'BNB',   name: 'BNB',          class: 'crypto',           sector: 'Exchange',       price:    722, change24h:  0.8, change7d:  1.4, marketCap:  100000000000, momentum: 'LOW',  volatility: 'MED',  liquidity: 'HIGH', beta: 0.92, event: 'None',             atrPct: 2.3 },
-  { symbol: 'XRP',   name: 'XRP',          class: 'crypto',           sector: 'Payments',       price:   1.40, change24h:  4.3, change7d:  5.1, marketCap:   84000000000, momentum: 'HIGH', volatility: 'MED',  liquidity: 'HIGH', beta: 0.98, event: 'None',             atrPct: 3.4 },
-  { symbol: 'DOGE',  name: 'Dogecoin',     class: 'crypto',           sector: 'Meme',           price: 0.0840, change24h:  0.7, change7d: -2.6, marketCap:   12600000000, momentum: 'LOW',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.72, event: 'ETF wind-down',    atrPct: 6.1 },
-  { symbol: 'AVAX',  name: 'Avalanche',    class: 'crypto',           sector: 'Smart contract', price:   7.50, change24h:  2.7, change7d:  1.2, marketCap:    3200000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.31, event: 'None',             atrPct: 4.0 },
-  { symbol: 'ADA',   name: 'Cardano',      class: 'crypto',           sector: 'Smart contract', price:  0.209, change24h:  2.4, change7d: -1.8, marketCap:    7400000000, momentum: 'LOW',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.10, event: 'None',             atrPct: 3.6 },
-  // Tokenized U.S. mega-cap (Bitget spot R-pairs track the real NASDAQ/NYSE prints)
+  // TOKENIZED U.S. EQUITIES — primary universe (Bitget spot R-pairs like RNVDAUSDT track the real NASDAQ/NYSE prints).
   { symbol: 'NVDA',  name: 'NVIDIA',       class: 'tokenized-equity', sector: 'Semis / AI',     price: 212.50, change24h: -2.4, change7d: -1.4, marketCap: 5200000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.62, event: 'Anthropic stake chatter', atrPct: 3.4 },
   { symbol: 'TSLA',  name: 'Tesla',        class: 'tokenized-equity', sector: 'Auto / AI',      price: 358.80, change24h: -1.6, change7d: -2.2, marketCap: 1150000000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.98, event: 'Robotaxi update',  atrPct: 4.2 },
   { symbol: 'AAPL',  name: 'Apple',        class: 'tokenized-equity', sector: 'Consumer tech',  price: 332.00, change24h: -0.3, change7d:  0.8, marketCap: 4900000000000, momentum: 'LOW',  volatility: 'LOW',  liquidity: 'HIGH', beta: 1.14, event: 'None',             atrPct: 1.6 },
@@ -50,6 +40,15 @@ export const DEMO_UNIVERSE = [
   { symbol: 'AMD',   name: 'Advanced Micro Devices', class: 'tokenized-equity', sector: 'Semis / AI', price: 486.00, change24h: -5.2, change7d: -3.3, marketCap: 790000000000, momentum: 'HIGH', volatility: 'HIGH', liquidity: 'HIGH', beta: 1.72, event: 'MI400 launch',    atrPct: 3.2 },
   { symbol: 'COIN',  name: 'Coinbase',     class: 'tokenized-equity', sector: 'Crypto exchange',price: 180.20, change24h:  4.0, change7d:  6.6, marketCap:   45500000000, momentum: 'HIGH', volatility: 'HIGH', liquidity: 'HIGH', beta: 2.31, event: 'Volume beat',      atrPct: 5.4 },
   { symbol: 'MSTR',  name: 'MicroStrategy',class: 'tokenized-equity', sector: 'BTC treasury',   price: 131.70, change24h:  2.5, change7d:  4.4, marketCap:   38500000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 2.62, event: 'BTC beta',         atrPct: 6.2 },
+  // CRYPTO CORRELATION SET — kept for macro context, BTC-beta calibration and cross-asset risk-regime reads.
+  { symbol: 'BTC',   name: 'Bitcoin',      class: 'crypto',           sector: 'Store of value', price: 77800, change24h:  1.3, change7d:  3.1, marketCap: 1550000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.00, event: 'ETF flows',        atrPct: 2.6 },
+  { symbol: 'ETH',   name: 'Ethereum',     class: 'crypto',           sector: 'Smart contract', price:   2508, change24h:  1.2, change7d:  2.4, marketCap:  303000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.18, event: 'Staking flows',    atrPct: 3.1 },
+  { symbol: 'SOL',   name: 'Solana',     class: 'crypto',           sector: 'Smart contract', price:    102, change24h:  1.9, change7d:  4.4, marketCap:   55000000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.45, event: 'Firedancer',       atrPct: 4.8 },
+  { symbol: 'BNB',   name: 'BNB',          class: 'crypto',           sector: 'Exchange',       price:    722, change24h:  0.8, change7d:  1.4, marketCap:  100000000000, momentum: 'LOW',  volatility: 'MED',  liquidity: 'HIGH', beta: 0.92, event: 'None',             atrPct: 2.3 },
+  { symbol: 'XRP',   name: 'XRP',          class: 'crypto',           sector: 'Payments',       price:   1.40, change24h:  4.3, change7d:  5.1, marketCap:   84000000000, momentum: 'HIGH', volatility: 'MED',  liquidity: 'HIGH', beta: 0.98, event: 'None',             atrPct: 3.4 },
+  { symbol: 'DOGE',  name: 'Dogecoin',     class: 'crypto',           sector: 'Meme',           price: 0.0840, change24h:  0.7, change7d: -2.6, marketCap:   12600000000, momentum: 'LOW',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.72, event: 'ETF wind-down',    atrPct: 6.1 },
+  { symbol: 'AVAX',  name: 'Avalanche',    class: 'crypto',           sector: 'Smart contract', price:   7.50, change24h:  2.7, change7d:  1.2, marketCap:    3200000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.31, event: 'None',             atrPct: 4.0 },
+  { symbol: 'ADA',   name: 'Cardano',      class: 'crypto',           sector: 'Smart contract', price:  0.209, change24h:  2.4, change7d: -1.8, marketCap:    7400000000, momentum: 'LOW',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.10, event: 'None',             atrPct: 3.6 },
 ]
 
 export const CRYPTO_SYMBOLS = new Set(DEMO_UNIVERSE.filter(a => a.class === 'crypto').map(a => a.symbol))
@@ -61,7 +60,8 @@ const seedLogs = [
   { id: 'log-2', time: '00:00:01', type: 'BOOT', message: 'Awaiting trader question', detail: 'Type a research question to invoke the skill pack' },
 ]
 
-const seedWatchlist = ['NVDA', 'AMD', 'MSTR', 'BTC', 'ETH', 'SOL', 'COIN']
+// US equities first — this desk is built around event-driven US-equity / tokenized-stock trading.
+const seedWatchlist = ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMD', 'META', 'MSTR', 'COIN', 'BTC', 'ETH']
 
 const seedMemory = {
   thesis: 'Research any name in the universe. Follow the tape only when news, technicals, sentiment and macro agree; sit out when they diverge.',
@@ -1121,7 +1121,10 @@ export class NightwatchProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
-        signal: AbortSignal.timeout(9000),
+        // Server worst case: live-context build + engine + LLM narration (9s
+        // internal timeout) + Bitget probe (2.5s). Stay above that so a healthy
+        // adapter is never silently downgraded to the offline LOCAL engine.
+        signal: AbortSignal.timeout(30000),
       })
       if (!response.ok) throw new Error(`Provider returned ${response.status}`)
       const body = await response.json()
@@ -1215,12 +1218,14 @@ export class LocalNightwatchEngine {
 /* -------------------------------------------------------------- convenience */
 
 export const RESEARCH_QUESTION_SUGGESTIONS = [
-  { id: 'nvda',  label: 'Why is NVDA moving?',                 question: 'Why is NVDA moving right now?' },
-  { id: 'btc',   label: 'Is the BTC breakout sustainable?',    question: 'Is the current BTC breakout sustainable overnight?' },
-  { id: 'scan',  label: 'Strongest overnight opportunities',   question: 'Find the strongest overnight opportunities across my watchlist.' },
-  { id: 'coin',  label: 'Research COIN into weekend flows',    question: 'Research COIN into weekend crypto flows.' },
-  { id: 'mstr',  label: 'Stress-test long MSTR here',          question: '/thesis Long MSTR here as a BTC-beta trade.' },
-  { id: 'aapl',  label: 'Short AAPL overnight — worth it?',    question: 'Short AAPL overnight — is the setup worth it?' },
+  { id: 'nvda',   label: 'Why is NVDA moving right now?',       question: 'Why is NVDA moving right now?' },
+  { id: 'tsla',   label: 'Research TSLA into the print',        question: 'Research TSLA overnight — is the setup sustainable into the next print?' },
+  { id: 'aapl',   label: 'Short AAPL overnight — worth it?',    question: 'Short AAPL overnight — is the setup worth it?' },
+  { id: 'msft',   label: 'MSFT vs. macro risk-off',             question: 'How does MSFT hold up if macro flips risk-off overnight?' },
+  { id: 'meta',   label: 'META ad-tier momentum still real?',   question: 'Is META’s ad-tier momentum still real, or already priced in?' },
+  { id: 'scan',   label: 'Strongest overnight opportunities',   question: 'Find the strongest overnight opportunities across my watchlist.' },
+  { id: 'mstr',   label: 'Stress-test long MSTR here',          question: '/thesis Long MSTR here as a BTC-beta trade.' },
+  { id: 'coin',   label: 'Research COIN into weekend flows',    question: 'Research COIN into weekend crypto flows.' },
 ]
 
 export const BITGET_CONNECTION_HELP = [
@@ -1387,6 +1392,19 @@ export const DEMO_NEWS = [
   },
 ]
 
+/**
+ * Sanitize an untrusted URL (e.g. RSS <link>) for safe use in an href.
+ * Blocks javascript:/data: and other script-executing schemes that would run
+ * in the app origin and could exfiltrate the localStorage auth token.
+ */
+export function safeUrl(u) {
+  try {
+    const parsed = new URL(String(u ?? ''), 'https://placeholder.invalid')
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href
+  } catch { /* fall through */ }
+  return '#'
+}
+
 /** Bitget deep-link for a symbol (spot USDT pair by default; equity tokens use rEQUITY convention). */
 export function bitgetTradeUrl(symbol, direction = 'LONG') {
   const asset = DEMO_UNIVERSE.find(a => a.symbol === symbol)
@@ -1465,8 +1483,9 @@ function buildNewsSummary(item, rows) {
 export function ingestNewsItem(session, newsItem) {
   const stamped = {
     ...newsItem,
-    time: nowClock(),
-    publishedAt: new Date().toISOString(),
+    time: newsItem.time || nowClock(),
+    publishedAt: newsItem.publishedAt || new Date().toISOString(),
+    ingestedAt: new Date().toISOString(),
     isSimulated: newsItem.isSimulated === true,
   }
   const analysis = analyzeNewsForUser(stamped, session)

@@ -12,10 +12,11 @@ import { MarketPulse } from './MarketPulse.jsx'
 
 async function api(pathOrToken, opts = {}) {
   if (!hasApi()) throw new Error('adapter not attached')
-  const { token, ...rest } = opts
+  const { token, timeoutMs = 15000, ...rest } = opts
   const headers = { 'Content-Type': 'application/json', ...(rest.headers || {}) }
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(apiUrl(pathOrToken), { ...rest, headers })
+  // Without a timeout a hung backend wedges the UI forever (busy=true, no error).
+  const res = await fetch(apiUrl(pathOrToken), { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return await res.json()
 }
@@ -84,13 +85,13 @@ export function SignInWidget({ onSignedIn }) {
     return (
       <form className="panel signin-panel" onSubmit={verifyCode}>
         <div className="panel-head">
-          <h3>Enter your sign-in code</h3>
-          <small>Sent to <b>{email}</b></small>
+          <h3>Check your inbox</h3>
+          <small>We sent a 6-digit sign-in code to <b>{email}</b>.</small>
         </div>
         <div className="signin-body">
           {notice && <div className="signin-notice">{notice}</div>}
           <label className="signin-field">
-            <small>6-digit code</small>
+            <small>Sign-in code</small>
             <input
               className="signin-code-input"
               value={code}
@@ -108,7 +109,7 @@ export function SignInWidget({ onSignedIn }) {
             {busy ? 'Verifying…' : 'Sign in'}
           </button>
           <div className="signin-alt">
-            <button type="button" className="signin-link" onClick={changeEmail}>← Use a different email</button>
+            <button type="button" className="signin-link" onClick={changeEmail}>Use a different email</button>
             <button type="button" className="signin-link" onClick={requestCode} disabled={busy}>Resend code</button>
           </div>
           {error && <p className="signin-error">{error}</p>}
@@ -120,19 +121,19 @@ export function SignInWidget({ onSignedIn }) {
   return (
     <form className="panel signin-panel" onSubmit={requestCode}>
       <div className="panel-head">
-        <h3>Sign in with email</h3>
-        <small>No password — we email you a one-time code</small>
+        <h3>Sign in</h3>
+        <small>Passwordless. We send a one-time code to your email.</small>
       </div>
       <div className="signin-body">
         <label className="signin-field">
-          <small>Work email</small>
+          <small>Email address</small>
           <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="you@example.com" autoComplete="email" autoFocus required />
         </label>
         <button className="btn primary signin-btn" type="submit" disabled={busy || !email}>
-          {busy ? 'Sending code…' : 'Continue with email'}
+          {busy ? 'Sending code…' : 'Continue'}
         </button>
         <p className="signin-fine">
-          We'll email a 6-digit code that's valid for 10 minutes. By continuing you agree to receive one-time sign-in codes at this address.
+          By continuing you agree to receive one-time sign-in codes at this address and to our terms of use. Codes expire after 10 minutes.
         </p>
         {error && <p className="signin-error">{error}</p>}
       </div>
@@ -149,10 +150,15 @@ export function PaperStrip({ user, onReset }) {
     if (!token) return
     api('/paper', { token }).then(r => setPaper(r.paper)).catch(() => {})
   }, [token])
+  const [resetting, setResetting] = useState(false)
   const reset = async () => {
-    if (!token) return
-    const r = await api('/paper/reset', { method: 'POST', token })
-    setPaper(r.paper); onReset?.()
+    if (!token || resetting) return
+    setResetting(true)
+    try {
+      const r = await api('/paper/reset', { method: 'POST', token })
+      setPaper(r.paper); onReset?.()
+    } catch { /* keep current paper state */ }
+    finally { setResetting(false) }
   }
   if (!paper) return null
   const fmt = (n) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
@@ -162,7 +168,7 @@ export function PaperStrip({ user, onReset }) {
       <div><small>FREE CAPITAL</small><b>{fmt(paper.freeCapital)}</b><em className={paper.freeCapital >= paper.startingCapital ? 'up' : 'muted'}>ready to allocate</em></div>
       <div><small>ALLOCATED</small><b>{fmt(paper.allocatedCapital)}</b><em className="muted">across followed playbooks</em></div>
       <div><small>REALIZED P&L</small><b className={paper.totalPnl >= 0 ? 'up' : 'down'}>{paper.totalPnl >= 0 ? '+' : ''}{fmt(paper.totalPnl)}</b><em className="muted">closed only</em></div>
-      <div style={{ display: 'flex', alignItems: 'end' }}><button className="btn ghost sm" onClick={reset}><RotateCcw size={12} /> RESET</button></div>
+      <div style={{ display: 'flex', alignItems: 'end' }}><button className="btn ghost sm" onClick={reset} disabled={resetting}><RotateCcw size={12} /> RESET</button></div>
     </div>
   )
 }
@@ -201,7 +207,7 @@ export function ExplorePage({ user, onOpenPlaybook }) {
           return (
             <button key={p.id} className="playbook-card" onClick={() => onOpenPlaybook(p.id)}>
               <div className="pc-head">
-                <div className={`asset-mark ${p.asset === 'BTC' || p.asset === 'ETH' || p.asset === 'SOL' ? 'crypto' : 'equity'}`}>{p.asset[0]}</div>
+                <div className={`asset-mark ${p.asset === 'BTC' || p.asset === 'ETH' || p.asset === 'SOL' ? 'crypto' : 'equity'}`}>{p.asset?.[0] || '?'}</div>
                 <div><b>{p.title}</b><small>{p.ownerName || 'anonymous'} · {p.canonical ? 'CANONICAL' : 'COMMUNITY'}</small></div>
                 <span className={`pill mini ${p.direction === 'LONG' ? 'green' : 'amber'}`}>{p.direction}</span>
               </div>
@@ -210,7 +216,7 @@ export function ExplorePage({ user, onOpenPlaybook }) {
                 <div className="pc-live">
                   <span>{p.asset} <b>{priceLine}</b></span>
                   <em className={t.changePct24h >= 0 ? 'up' : 'down'}>{t.changePct24h >= 0 ? '+' : ''}{t.changePct24h?.toFixed(2)}%</em>
-                  {p.runtime?.position ? <span className="pill green mini">OPEN {(p.runtime.position.pnlPct * 100).toFixed(2)}%</span> : <span className="pill outline mini">FLAT</span>}
+                    {p.runtime?.position ? <span className="pill green mini">OPEN {((p.runtime.position.pnlPct ?? 0) * 100).toFixed(2)}%</span> : <span className="pill outline mini">FLAT</span>}
                 </div>
               )}
               <div className="pc-foot">
@@ -238,21 +244,29 @@ export function PlaybookDetail({ id, user, onClose, onAllocated }) {
   const [ticker, setTicker] = useState(null)
   const token = getToken()
   useEffect(() => {
-    api(`/playbooks/${id}`).then(async r => {
-      setP(r.playbook)
-      // Auto-backtest on first open if none yet
-      if (r.playbook && !r.playbook.backtest) {
-        try {
-          await api(`/playbooks/${id}/backtest`, { method: 'POST' })
-          const r2 = await api(`/playbooks/${id}`)
-          setP(r2.playbook)
-        } catch { /* history may still be warming */ }
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await api(`/playbooks/${id}`)
+        if (!alive) return
+        setP(r.playbook)
+        // Auto-backtest on first open if none yet
+        if (r.playbook && !r.playbook.backtest) {
+          try {
+            await api(`/playbooks/${id}/backtest`, { method: 'POST', timeoutMs: 60000 })
+            const r2 = await api(`/playbooks/${id}`)
+            if (alive) setP(r2.playbook)
+          } catch { /* history may still be warming */ }
+        }
+        // Fetch live ticker
+        if (alive && r.playbook?.asset) {
+          api('/prices/live').then(px => { if (alive) setTicker(px.tickers?.[r.playbook.asset] || null) }).catch(() => {})
+        }
+      } catch (e) {
+        if (alive) setError(e.message)
       }
-      // Fetch live ticker
-      if (r.playbook?.asset) {
-        api('/prices/live').then(px => setTicker(px.tickers?.[r.playbook.asset] || null)).catch(() => {})
-      }
-    }).catch(e => setError(e.message))
+    })()
+    return () => { alive = false }
   }, [id])
   const follow = async () => {
     setBusy(true); setError(null)
@@ -278,13 +292,13 @@ export function PlaybookDetail({ id, user, onClose, onAllocated }) {
           <>
             <p className="pc-desc">{p.description}</p>
             <div className="pb-conds">
-              <div><small>SIGNAL CONDITIONS</small>{p.signalConditions.map((c, i) => <em key={i}>{c.field} {c.op} {String(c.value)}</em>)}</div>
-              <div><small>EXIT CONDITIONS</small>{p.exitConditions.map((c, i) => <em key={i}>{c.field} {c.op} {String(c.value)}</em>)}</div>
+              <div><small>SIGNAL CONDITIONS</small>{(p.signalConditions || []).map((c, i) => <em key={i}>{c.field} {c.op} {String(c.value)}</em>)}</div>
+              <div><small>EXIT CONDITIONS</small>{(p.exitConditions || []).map((c, i) => <em key={i}>{c.field} {c.op} {String(c.value)}</em>)}</div>
             </div>
             <div className="stat-strip">
               <div><small>ASSET</small><b>{p.asset}</b>{ticker && <em className={ticker.changePct24h >= 0 ? 'up' : 'down'}>${ticker.last?.toLocaleString(undefined, { maximumFractionDigits: 2 })} · {ticker.changePct24h >= 0 ? '+' : ''}{ticker.changePct24h?.toFixed(2)}%</em>}</div>
               <div><small>DIRECTION</small><b>{p.direction}</b></div>
-              <div><small>SIZING</small><b>{(p.sizing.value * 100).toFixed(0)}%</b><em className="muted">of capital</em></div>
+              <div><small>SIZING</small><b>{p.sizing?.value != null ? `${(p.sizing.value * 100).toFixed(0)}%` : '—'}</b><em className="muted">of capital</em></div>
               <div><small>FOLLOWERS</small><b>{p.followers ?? 0}</b><em className="muted">${(p.totalAllocatedUsd || 0).toLocaleString()}</em></div>
               <div><small>LIVE POSITION</small><b className={p.runtime?.position ? 'up' : ''}>{p.runtime?.position ? 'OPEN' : 'FLAT'}</b>{p.runtime?.position ? <em className={p.runtime.position.pnlPct >= 0 ? 'up' : 'down'}>{(p.runtime.position.pnlPct * 100).toFixed(2)}%</em> : null}</div>
             </div>
@@ -324,41 +338,114 @@ export function PlaybookDetail({ id, user, onClose, onAllocated }) {
 
 /** ---------------- Leaderboard page ---------------- */
 
-export function LeaderboardPage({ user, onOpenPlaybook }) {
-  const [sort, setSort] = useState('followers')
+// US-equity universe used to tag rows so traders can see at a glance whether
+// a Playbook trades tokenized equities or crypto correlation.
+const EQUITY_SYMBOLS = new Set(['NVDA','TSLA','AAPL','MSFT','AMZN','GOOGL','META','AMD','COIN','MSTR'])
+
+export function LeaderboardPage({ user, onOpenPlaybook, onOpenAssayer }) {
+  const [sort, setSort] = useState('return')
+  const [assetFilter, setAssetFilter] = useState('ALL')     // ALL · EQUITY · CRYPTO
   const [rows, setRows] = useState(null)
-  useEffect(() => { api(`/leaderboard?sort=${sort}&limit=50`).then(r => setRows(r.rows)).catch(() => setRows([])) }, [sort])
-  if (!hasApi()) return <div className="empty-report"><b>No adapter attached</b></div>
+
+  useEffect(() => {
+    let alive = true
+    api(`/leaderboard?sort=${sort}&limit=100`)
+      .then(r => { if (alive) setRows(Array.isArray(r.rows) ? r.rows : []) })
+      .catch(() => { if (alive) setRows([]) })
+    return () => { alive = false }
+  }, [sort])
+
+  const filtered = useMemo(() => {
+    if (!rows) return rows
+    if (assetFilter === 'EQUITY') return rows.filter(r => EQUITY_SYMBOLS.has(r.asset))
+    if (assetFilter === 'CRYPTO') return rows.filter(r => !EQUITY_SYMBOLS.has(r.asset))
+    return rows
+  }, [rows, assetFilter])
+
+  if (!hasApi()) return <div className="empty-report"><b>Adapter not attached</b></div>
+
+  const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(digits)}%`
+  const fmtCap = (n) => `$${Math.round(n || 0).toLocaleString()}`
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <div className="eyebrow"><Award size={12} /> LEADERBOARD · REAL-PRICE PAPER PnL</div>
-          <h1>The Assayer's ledger</h1>
+          <div className="eyebrow"><Award size={12} /> LEADERBOARD · REAL-PRICE PAPER P&amp;L · REAL FOLLOWERS</div>
+          <h1>Playbook leaderboard</h1>
+          <p className="lead">Every Playbook published by a real user, ranked on real backtests over cached Bitget 1h candles and marked-to-market against real live prices. No simulated volume, no fake followers.</p>
         </div>
-        <div className="filter-row">
-          {[['followers', 'Followers'], ['capital', 'Capital'], ['return', 'Return'], ['live', 'Live P&L'], ['recent', 'Recent']].map(([k, l]) => (
-            <button key={k} className={sort === k ? 'chip on' : 'chip'} onClick={() => setSort(k)}>{l}</button>
-          ))}
+        <div className="row-actions">
+          {onOpenAssayer && (
+            <button className="btn primary sm" onClick={onOpenAssayer}>
+              <Sparkles size={12} /> Draft a Playbook in the Assayer
+            </button>
+          )}
         </div>
       </div>
+
+      <div className="filter-row" style={{ marginTop: 8 }}>
+        <span className="filter-label">Sort</span>
+        {[['return', 'Total return'], ['live', 'Live P&L'], ['followers', 'Followers'], ['capital', 'Capital allocated'], ['recent', 'Most recent']].map(([k, l]) => (
+          <button key={k} className={sort === k ? 'chip on' : 'chip'} onClick={() => setSort(k)}>{l}</button>
+        ))}
+        <span className="filter-label" style={{ marginLeft: 20 }}>Universe</span>
+        {[['ALL', 'All'], ['EQUITY', 'U.S. equities'], ['CRYPTO', 'Crypto']].map(([k, l]) => (
+          <button key={k} className={assetFilter === k ? 'chip on' : 'chip'} onClick={() => setAssetFilter(k)}>{l}</button>
+        ))}
+      </div>
+
       <MarketPulse />
       {user ? <PaperStrip user={user} /> : null}
+
       <div className="panel">
-        <div className="pos-table">
-          <div className="pos-head"><span>#</span><span>Playbook</span><span>Asset</span><span>Owner</span><span>Followers</span><span>Allocated</span><span>Live</span><span></span></div>
-          {rows == null ? <div className="empty-body">loading…</div> : rows.length === 0 ? <div className="empty-body">no rows</div> : rows.map((r, i) => (
-            <div className="pos-row" key={r.id}>
-              <b className="mono">{i + 1}</b>
-              <b>{r.title}</b>
-              <span className="mono">{r.asset}</span>
-              <span className="mono muted">{r.ownerName || '—'}</span>
-              <b className="mono">{r.followers}</b>
-              <b className="mono">${r.totalAllocatedUsd.toLocaleString()}</b>
-              <b className={r.livePnlPct == null ? 'muted mono' : r.livePnlPct >= 0 ? 'up mono' : 'down mono'}>{r.livePnlPct == null ? '—' : `${(r.livePnlPct * 100).toFixed(2)}%`}</b>
-              <button className="chip mini" onClick={() => onOpenPlaybook(r.id)}>OPEN →</button>
+        <div className="panel-head"><h3>Ranked playbooks</h3><small>{filtered ? `${filtered.length} of ${rows.length}` : '—'}</small></div>
+        <div className="leaderboard-table">
+          <div className="lb-head">
+            <span>#</span>
+            <span>Playbook</span>
+            <span>Asset</span>
+            <span>Return</span>
+            <span>Win rate</span>
+            <span>Trades</span>
+            <span>Followers</span>
+            <span>Allocated</span>
+            <span>Live P&amp;L</span>
+            <span></span>
+          </div>
+          {filtered == null ? (
+            <div className="empty-body">loading real-price backtests…</div>
+          ) : filtered.length === 0 ? (
+            <div className="lb-empty">
+              <b>No Playbooks{assetFilter === 'EQUITY' ? ' for U.S. equities' : assetFilter === 'CRYPTO' ? ' for crypto' : ''} yet.</b>
+              <p>Playbooks are published strategies that anyone can follow with paper capital. Backtests run on real cached Bitget 1h candles; the leaderboard populates as soon as the first Playbook publishes.</p>
+              {onOpenAssayer ? (
+                <button className="btn primary" onClick={onOpenAssayer}><Sparkles size={13} /> Draft your first Playbook</button>
+              ) : null}
             </div>
-          ))}
+          ) : filtered.map((r, i) => {
+            const isEquity = EQUITY_SYMBOLS.has(r.asset)
+            return (
+              <div className="lb-row" key={r.id}>
+                <b className="mono muted">{i + 1}</b>
+                <div className="lb-title">
+                  <b>{r.title}</b>
+                  <small className="muted">{r.ownerName || '—'} · {new Date(r.createdAt).toISOString().slice(0, 10)}</small>
+                </div>
+                <span className="lb-asset">
+                  <b className="mono">{r.asset}</b>
+                  <em className={isEquity ? 'pill green mini' : 'pill outline mini'}>{isEquity ? 'Equity' : 'Crypto'}</em>
+                </span>
+                <b className={r.totalReturnPct == null ? 'mono muted' : r.totalReturnPct >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.totalReturnPct)}</b>
+                <b className="mono">{r.winRate == null ? '—' : `${(r.winRate * 100).toFixed(0)}%`}</b>
+                <span className="mono muted">{r.tradeCount || 0}</span>
+                <b className="mono">{r.followers}</b>
+                <b className="mono">{fmtCap(r.totalAllocatedUsd)}</b>
+                <b className={r.livePnlPct == null ? 'mono muted' : r.livePnlPct >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.livePnlPct, 2)}</b>
+                <button className="chip mini" onClick={() => onOpenPlaybook(r.id)}>Open</button>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -377,17 +464,18 @@ export function AssayerPage({ user, onAllocated }) {
 
   const send = async () => {
     const text = input.trim()
-    if (!text) return
+    if (!text || busy) return
     setInput('')
     setBusy(true)
     const next = [...messages, { role: 'user', content: text }]
     setMessages(next)
     try {
-      const r = await api('/assayer/chat', { method: 'POST', body: JSON.stringify({ messages: next }) })
-      setMessages([...next, { role: 'assistant', content: r.reply }])
+      // LLM-backed — allow longer than the default api() timeout.
+      const r = await api('/assayer/chat', { method: 'POST', body: JSON.stringify({ messages: next }), timeoutMs: 60000 })
+      setMessages(m => [...m, { role: 'assistant', content: r.reply }])
       if (r.playbook) setProposed(r.playbook)
     } catch (err) {
-      setMessages([...next, { role: 'assistant', content: `Something failed: ${err.message}` }])
+      setMessages(m => [...m, { role: 'assistant', content: `Something failed: ${err.message}` }])
     } finally { setBusy(false) }
   }
 
@@ -430,8 +518,8 @@ export function AssayerPage({ user, onAllocated }) {
           <div className="chat-proposed">
             <b>Proposed Playbook</b>
             <p>{proposed.title} · {proposed.asset} {proposed.direction}</p>
-            <small>Signal: {proposed.signalConditions.map(c => `${c.field} ${c.op} ${c.value}`).join(' AND ')}</small>
-            <small>Exit: {proposed.exitConditions.map(c => `${c.field} ${c.op} ${c.value}`).join(' AND ')}</small>
+            <small>Signal: {(proposed.signalConditions || []).map(c => `${c.field} ${c.op} ${c.value}`).join(' AND ')}</small>
+            <small>Exit: {(proposed.exitConditions || []).map(c => `${c.field} ${c.op} ${c.value}`).join(' AND ')}</small>
             {token ? <button className="btn primary sm" onClick={savePlaybook} disabled={busy}><Gem size={12} /> SAVE + PUBLISH</button> : <p className="hint-inline">Sign in to save + publish.</p>}
           </div>
         )}
@@ -439,7 +527,7 @@ export function AssayerPage({ user, onAllocated }) {
 
       <div className="commandbar">
         <div className="cb-icon"><MessageCircle size={15} /></div>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()} placeholder='e.g. "build a BTC ETF-flow follow" or "sketch an ETH oversold bounce"' />
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !busy && send()} placeholder='e.g. "build a BTC ETF-flow follow" or "sketch an ETH oversold bounce"' />
         <button className="btn primary" onClick={send} disabled={busy}><Send size={13} /> SEND</button>
       </div>
     </div>

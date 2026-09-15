@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, Award, BookOpen, BrainCircuit, BarChart3,
-  ChevronRight, Compass, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
+  CalendarClock, ChevronRight, Compass, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
@@ -32,13 +32,14 @@ import { runBacktestSynthetic } from './backtest.js'
 import { AssayerPage, ExplorePage, LeaderboardPage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
+import { ResearchCardActions } from './ui/ResearchCard.jsx'
 import {
   BITGET_CONNECTION_HELP, BITGET_SIGNAL_SKILLS, DEMO_NEWS,
   DemoMarketData, NightwatchProvider, PaperExecution,
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
   fmtPct, fmtPrice, ingestNewsItem, initialSession, loadSession, nowClock,
-  pickNextDemoNews, portfolioImpact, saveSession, shortId,
+  pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
 } from './domain'
 
 const NAV = [
@@ -97,16 +98,20 @@ function App({ authUser: signedInUser, onSignedOut }) {
         const body = await res.json()
         const s = body?.session || {}
         if (!alive) return
+        // Only let a server array replace local state when it actually holds
+        // something — signing in against a fresh/empty profile must not wipe
+        // research, positions or watchlist accumulated offline in this browser.
+        const pick = (remote, local) => Array.isArray(remote) && (remote.length > 0 || !(local?.length > 0)) ? remote : local
         setSession(prev => ({
           ...prev,
-          watchlist:   Array.isArray(s.watchlist)   ? s.watchlist   : prev.watchlist,
-          reports:     Array.isArray(s.reports)     ? s.reports     : prev.reports,
-          signals:     Array.isArray(s.signals)     ? s.signals     : prev.signals,
-          theses:      Array.isArray(s.theses)      ? s.theses      : prev.theses,
-          positions:   Array.isArray(s.positions)   ? s.positions   : prev.positions,
-          decisions:   Array.isArray(s.decisions)   ? s.decisions   : prev.decisions,
-          reviews:     Array.isArray(s.reviews)     ? s.reviews     : prev.reviews,
-          newsAlerts:  Array.isArray(s.newsAlerts)  ? s.newsAlerts  : prev.newsAlerts,
+          watchlist:   pick(s.watchlist,   prev.watchlist),
+          reports:     pick(s.reports,     prev.reports),
+          signals:     pick(s.signals,     prev.signals),
+          theses:      pick(s.theses,      prev.theses),
+          positions:   pick(s.positions,   prev.positions),
+          decisions:   pick(s.decisions,   prev.decisions),
+          reviews:     pick(s.reviews,     prev.reviews),
+          newsAlerts:  pick(s.newsAlerts,  prev.newsAlerts),
           memory:      s.preferences ? { ...prev.memory, preferences: { ...prev.memory.preferences, ...s.preferences } } : prev.memory,
         }))
       } catch { /* keep local session as-is */ }
@@ -114,6 +119,12 @@ function App({ authUser: signedInUser, onSignedOut }) {
     })()
     return () => { alive = false }
   }, [authUser?.id, authToken])
+
+  // Structural signature of the paper book: id/status/sizing only. Mark-to-market
+  // ticks mutate prices/pnl every 10s — syncing on array identity fired a full
+  // PATCH on every tick; the server copy only needs structural changes (live
+  // prices re-mark open positions on the next hydrate anyway).
+  const positionsSig = (session.positions || []).map(p => `${p.id}:${p.status}:${p.notional}:${p.entryPrice}:${p.closedAt || ''}`).join('|')
 
   // Debounced push of personal state back to the user's account so it survives
   // browser reloads and shows up on their other devices.
@@ -142,7 +153,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
   }, [
     authUser?.id, authToken, personalHydrated,
     session.watchlist, session.memory?.preferences, session.reports, session.signals,
-    session.theses, session.positions, session.decisions, session.reviews, session.newsAlerts,
+    session.theses, positionsSig, session.decisions, session.reviews, session.newsAlerts,
   ])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
   useEffect(() => { const t = setInterval(() => setClock(nowClock()), 1000); return () => clearInterval(t) }, [])
@@ -213,7 +224,11 @@ function App({ authUser: signedInUser, onSignedOut }) {
           const fresh = items
             .filter(it => it && !existingIds.has(it.id))
             .map(it => ({ ...it, analysis: analyzeNewsForUser(it, prev) }))
-          const merged = [...fresh, ...(prev.news || []).filter(n => !n.isSimulated)].slice(0, 60)
+          // Sort by real publish time — SSE items ingested between request and
+          // response are newer than the REST batch and must not render below it.
+          const merged = [...fresh, ...(prev.news || []).filter(n => !n.isSimulated)]
+            .sort((a, b) => new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0))
+            .slice(0, 60)
           return { ...prev, news: merged }
         })
       } catch { /* SSE will fill in */ }
@@ -221,24 +236,26 @@ function App({ authUser: signedInUser, onSignedOut }) {
     return () => { alive = false }
   }, [])
 
+  // Ingest one live news item. Runs outside React state updaters (via the
+  // sessionRef mirror) so SSE bursts deliver EVERY headline — a "latest wins"
+  // state hop would silently drop all but the last item of each burst — and so
+  // the breaking-news toast never fires from inside an updater.
+  const ingestLiveNews = (data) => {
+    if (!data?.headline) return
+    const prev = sessionRef.current
+    const next = ingestNewsItem(prev, data)
+    sessionRef.current = next
+    setSession(next)
+    if ((next.newsAlerts || []).length > (prev.newsAlerts || []).length) {
+      const h = String(data.headline || '')
+      setToast(`Breaking · ${h.slice(0, 80)}${h.length > 80 ? '…' : ''}`)
+    }
+  }
+
   // Live news + prices: prefer the adapter's SSE streams; fall back only for
   // dev-time no-adapter mode (see hasApi() gate above).
-  const newsStream   = useLiveStream('/news/stream', ['news', 'open'])
-  const pricesStream = useLiveStream('/prices/stream', ['prices', 'open'])
-
-  useEffect(() => {
-    const ev = newsStream.events?.news
-    if (!ev?.data) return
-    setSession(prev => {
-      // Live news item ships with .affectedAssets already; run local analyzer for user impact.
-      const next = ingestNewsItem(prev, ev.data)
-      const prevAlerts = prev.newsAlerts || []
-      if (next.newsAlerts.length > prevAlerts.length) {
-        setToast(`Breaking · ${ev.data.headline.slice(0, 80)}${ev.data.headline.length > 80 ? '…' : ''}`)
-      }
-      return next
-    })
-  }, [newsStream.events?.news?.at])
+  const newsStream   = useLiveStream('/news/stream', ['news'], (type, data) => { if (type === 'news') ingestLiveNews(data) })
+  const pricesStream = useLiveStream('/prices/stream', ['prices'])
 
   useEffect(() => {
     const ev = pricesStream.events?.prices
@@ -263,14 +280,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
   useEffect(() => {
     if (hasApi() || newsStream.endpoint) return
     const t = setInterval(() => {
-      setSession(prev => {
-        const next = ingestNewsItem(prev, pickNextDemoNews(prev.newsCursor))
-        const prevAlerts = prev.newsAlerts || []
-        if (next.newsAlerts.length > prevAlerts.length) {
-          setToast(`Breaking · ${next.news[0].headline.slice(0, 80)}${next.news[0].headline.length > 80 ? '…' : ''}`)
-        }
-        return next
-      })
+      ingestLiveNews(pickNextDemoNews(sessionRef.current.newsCursor))
     }, 45000)
     return () => clearInterval(t)
   }, [newsStream.endpoint])
@@ -310,7 +320,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
     const asset = routed.asset || 'BTC'
     setSession(s => addLog({ ...s, stage: 'GATHERING' }, 'SKILL', 'Skill pack armed', `Target ${asset}`))
     const response = await provider.run({ intent: 'research', question, asset, context: { memory: sessionRef.current.memory, session: { watchlist: sessionRef.current.watchlist, positions: sessionRef.current.positions } } })
-    const report = response.artifact.report
+    // Stamp the narration engine onto the report so the downloadable card can
+    // credit Qwen (or whichever provider actually authored the writeup).
+    const report = { ...response.artifact.report, engine: response.engine || 'LOCAL' }
     for (const skill of report.skills) {
       await sleep(RESEARCH_STEP_MS)
       setLiveTrace(t => [...t, skill])
@@ -397,9 +409,11 @@ function App({ authUser: signedInUser, onSignedOut }) {
     } catch (err) { notify(err.message) }
   }
 
-  const closeAtMark = () => {
+  const closeAtMark = (positionId) => {
     const s = sessionRef.current
-    const open = s.positions.find(p => p.status === 'OPEN')
+    const open = positionId
+      ? s.positions.find(p => p.id === positionId && p.status === 'OPEN')
+      : s.positions.find(p => p.status === 'OPEN')
     if (!open) { notify('No open paper position.'); return }
     // Real product: only close at the current mark-to-market P&L. If the live tick
     // has not yet marked this position, keep P&L at 0 rather than fabricating a return.
@@ -496,7 +510,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
           </div>
           <div className="topbar-right">
             <span className="ticker-tape">
-              {['BTC','ETH','NVDA','SOL','MSTR','AMD'].map(sym => {
+              {['NVDA','TSLA','AAPL','MSFT','MSTR','COIN','BTC','ETH'].map(sym => {
                 const m = session.markets.find(x => x.symbol === sym) || session.universe.find(x => x.symbol === sym)
                 if (!m) return null
                 return <span key={sym}><b>{sym}</b> ${fmtPrice(m.price)} <em className={m.change24h >= 0 ? 'up' : 'down'}>{fmtPct(m.change24h / 100)}</em></span>
@@ -506,6 +520,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
           </div>
         </header>
 
+        {/* Per-page boundary (keyed on page): a malformed server payload crashes
+            one tab, not the whole workstation; navigating resets the boundary. */}
+        <ErrorBoundary key={page}>
         {page === 'research'  && <ResearchPage {...{ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact }} />}
         {page === 'analysis'  && <AnalysisPage />}
         {page === 'news'      && <NewsPage session={session} setSession={setSession} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
@@ -521,13 +538,14 @@ function App({ authUser: signedInUser, onSignedOut }) {
             ? <ExplorePage user={authUser} onOpenPlaybook={setOpenPlaybookId} />
             : <div className="page"><SignInWidget onSignedIn={(u) => setAuthUser(u)} /><ExplorePage user={null} onOpenPlaybook={setOpenPlaybookId} /></div>
         )}
-        {page === 'leaderboard' && <LeaderboardPage user={authUser} onOpenPlaybook={setOpenPlaybookId} />}
+        {page === 'leaderboard' && <LeaderboardPage user={authUser} onOpenPlaybook={setOpenPlaybookId} onOpenAssayer={() => setPage('assayer')} />}
         {page === 'assayer'   && (
           authUser
             ? <AssayerPage user={authUser} onAllocated={() => setPage('leaderboard')} />
             : <div className="page"><SignInWidget onSignedIn={(u) => setAuthUser(u)} /><AssayerPage user={null} /></div>
         )}
         {openPlaybookId && <PlaybookDetail id={openPlaybookId} user={authUser} onClose={() => setOpenPlaybookId(null)} onAllocated={() => { setOpenPlaybookId(null); notify('Paper allocation updated') }} />}
+        </ErrorBoundary>
 
         {toast && <div className="toast"><ShieldCheck size={13} /> {toast}</div>}
       </main>
@@ -565,6 +583,7 @@ function ResearchPage({ command, setCommand, submit, running, session, liveTrace
           </button>
         </div>
         <MarketPulse />
+        <EarningsStrip onAsk={(sym) => submit(`Research ${sym} into its earnings print`)} />
         <div className="chip-row">
           {RESEARCH_QUESTION_SUGGESTIONS.map(chip => (
             <button className="chip" key={chip.id} onClick={() => { setCommand(chip.question); submit(chip.question) }}>{chip.label}</button>
@@ -629,6 +648,8 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
         closeAtMark={closeAtMark}
       />
 
+      <ThesisAndCardBlock report={report} />
+
       <div className="report-summary">
         <p>{report.summary}</p>
         {report.dataFreshness && <small className="muted">{report.dataFreshness}</small>}
@@ -657,7 +678,7 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
               <ul className="dense">
                 {items.map((n, i) => (
                   <li key={i}>
-                    <a href={n.url} target="_blank" rel="noreferrer noopener">{n.headline}</a>
+                    <a href={safeUrl(n.url)} target="_blank" rel="noreferrer noopener">{n.headline}</a>
                     <em>{n.source} · {String(n.publishedAt || '').slice(5, 16).replace('T', ' ')} UTC · {n.direction}{n.severity === 'HIGH' ? ' · HIGH SEV' : ''}</em>
                   </li>
                 ))}
@@ -734,7 +755,7 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
             {isTradable && <button className="btn primary" onClick={() => decide('APPROVE')}>APPROVE PAPER TRADE</button>}
             {isTradable && <button className="btn ghost" onClick={() => decide('REJECT', { rationale: 'Not now.' })}>REJECT</button>}
             <button className="btn ghost" onClick={() => decide('SIT_OUT', { rationale: 'Sit-out logged.' })}>LOG SIT-OUT</button>
-            {openPosition && <button className="btn ghost" onClick={closeAtMark}>CLOSE AT MARK</button>}
+            {openPosition && <button className="btn ghost" onClick={() => closeAtMark(openPosition.id)}>CLOSE AT MARK</button>}
           </div>
         </div>
       ) : (
@@ -753,7 +774,7 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
       <div className="citations">
         <small>Sources · </small>
         {report.citations.slice(0, 12).map((c, i) => (
-          <span key={i}>[{c.skill}] {c.url ? <a href={c.url} target="_blank" rel="noreferrer noopener">{c.source}</a> : c.source}</span>
+          <span key={i}>[{c.skill}] {c.url ? <a href={safeUrl(c.url)} target="_blank" rel="noreferrer noopener">{c.source}</a> : c.source}</span>
         ))}
       </div>
     </article>
@@ -763,13 +784,15 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
 /* ------------------------------------------------------- Markets page */
 
 function MarketsPage({ session, onAsk, toggleWatch }) {
-  const [filter, setFilter] = useState('ALL')
+  const [filter, setFilter] = useState('EQUITY')
   const rows = session.markets.filter(m => filter === 'ALL' ? true : filter === 'CRYPTO' ? m.class === 'crypto' : m.class === 'tokenized-equity')
   return (
     <div className="page">
-      <PageHead title="Universe scanner" eyebrow={<><ScanLine size={12} /> 18 ASSETS · 7×24 TAPE</>}>
+      <PageHead title="Universe scanner" eyebrow={<><ScanLine size={12} /> TOKENIZED U.S. EQUITIES + CRYPTO CORRELATION SET · BITGET SPOT</>}>
         <div className="filter-row">
-          {['ALL','CRYPTO','EQUITY'].map(f => <button key={f} className={filter === f ? 'chip on' : 'chip'} onClick={() => setFilter(f)}>{f}</button>)}
+          {[['EQUITY','US Equities'], ['CRYPTO','Crypto correlation set'], ['ALL','All']].map(([f, label]) => (
+            <button key={f} className={filter === f ? 'chip on' : 'chip'} onClick={() => setFilter(f)}>{label}</button>
+          ))}
         </div>
       </PageHead>
       <div className="scanner">
@@ -962,7 +985,7 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
 
       <div className="stat-strip">
         <div><small>NAV</small><b>${nav.toLocaleString()}</b></div>
-        <div><small>OPEN NOTIONAL</small><b>${exposureBook.toLocaleString()}</b><em className="muted">{((exposureBook / nav) * 100).toFixed(1)}% of NAV</em></div>
+        <div><small>OPEN NOTIONAL</small><b>${exposureBook.toLocaleString()}</b><em className="muted">{nav > 0 ? `${((exposureBook / nav) * 100).toFixed(1)}% of NAV` : '—'}</em></div>
         <div><small>UNREALIZED P&L</small><b className={unrealized >= 0 ? 'up' : 'down'}>{fmtAbs(unrealized)}</b></div>
         <div><small>REALIZED P&L</small><b className={realized >= 0 ? 'up' : 'down'}>{fmtAbs(realized)}</b></div>
         <div><small>OPEN POSITIONS</small><b>{open.length}</b></div>
@@ -985,7 +1008,7 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
                 <span className="mono red">${fmtPrice(p.stopPrice)}</span>
                 <span className="mono up">${fmtPrice(p.targetPrice)}</span>
                 <b className={p.pnl >= 0 ? 'up mono' : 'down mono'}>{fmtAbs(p.pnl)} · {fmtPct(p.pnlPercent)}</b>
-                <button className="chip mini" onClick={closeAtMark}>CLOSE AT MARK</button>
+                <button className="chip mini" onClick={() => closeAtMark(p.id)}>CLOSE AT MARK</button>
               </div>
             ))}
           </div>
@@ -1294,8 +1317,10 @@ function BacktestPage({ session }) {
           })
           if (res.ok) {
             const body = await res.json()
-            setResult({ symbol, rows: body.rows, stats: body.stats, live: true, candleCount: body.candleCount })
-            return
+            if (Array.isArray(body?.rows) && body?.stats) {
+              setResult({ symbol, rows: body.rows, stats: body.stats, live: true, candleCount: body.candleCount })
+              return
+            }
           }
         } catch { /* fall through to synthetic */ }
       }
@@ -1394,6 +1419,14 @@ function BacktestPage({ session }) {
 function SettingsPage({ session, setSession, bitgetStatus, onReset }) {
   const prefs = session.memory.preferences
   const setPref = (key, value) => setSession(s => ({ ...s, memory: { ...s.memory, preferences: { ...s.memory.preferences, [key]: value } } }))
+  // Clamp numeric prefs on change: raw Number('') is NaN, which JSON-serializes
+  // to null and silently corrupts stored preferences; out-of-range values break
+  // signal gating and position sizing.
+  const setNumPref = (key, raw, min, max, fallback) => {
+    const n = Number(raw)
+    if (raw === '' || !Number.isFinite(n)) return
+    setPref(key, Math.min(max, Math.max(min, n)))
+  }
   return (
     <div className="page">
       <PageHead title="Settings" eyebrow={<><Settings size={12} /> RESEARCH PREFERENCES · INTEGRATIONS</>} />
@@ -1413,7 +1446,7 @@ function SettingsPage({ session, setSession, bitgetStatus, onReset }) {
       <div className="panel">
         <div className="panel-head"><h3>Trader profile</h3><small>Personalizes signals and stress tests</small></div>
         <div className="settings-grid">
-          <label><small>NAV (paper)</small><input type="number" value={prefs.nav} onChange={e => setPref('nav', Number(e.target.value) || 0)} /></label>
+          <label><small>NAV (paper)</small><input type="number" min="1000" step="1000" value={prefs.nav} onChange={e => setNumPref('nav', e.target.value, 1000, 1e9, 25000)} /></label>
           <label><small>Risk profile</small>
             <select value={prefs.risk} onChange={e => setPref('risk', e.target.value)}>
               {['CONSERVATIVE','MODERATE','AGGRESSIVE'].map(r => <option key={r}>{r}</option>)}
@@ -1429,9 +1462,9 @@ function SettingsPage({ session, setSession, bitgetStatus, onReset }) {
               {['INTRADAY','SWING','POSITION'].map(r => <option key={r}>{r}</option>)}
             </select>
           </label>
-          <label><small>Min confidence</small><input type="number" step="0.05" min="0.4" max="0.95" value={prefs.minConfidence} onChange={e => setPref('minConfidence', Number(e.target.value))} /></label>
-          <label><small>Min net edge</small><input type="number" step="0.001" min="0" max="0.1" value={prefs.minNetEdge} onChange={e => setPref('minNetEdge', Number(e.target.value))} /></label>
-          <label><small>Max position % NAV</small><input type="number" step="0.01" min="0.02" max="0.5" value={prefs.maxPositionPct} onChange={e => setPref('maxPositionPct', Number(e.target.value))} /></label>
+          <label><small>Min confidence</small><input type="number" step="0.05" min="0.4" max="0.95" value={prefs.minConfidence} onChange={e => setNumPref('minConfidence', e.target.value, 0.4, 0.95, 0.6)} /></label>
+          <label><small>Min net edge</small><input type="number" step="0.001" min="0" max="0.1" value={prefs.minNetEdge} onChange={e => setNumPref('minNetEdge', e.target.value, 0, 0.1, 0.005)} /></label>
+          <label><small>Max position % NAV</small><input type="number" step="0.01" min="0.02" max="0.5" value={prefs.maxPositionPct} onChange={e => setNumPref('maxPositionPct', e.target.value, 0.02, 0.5, 0.1)} /></label>
         </div>
       </div>
 
@@ -1562,7 +1595,7 @@ function ActionSummaryCard({ report, openPosition, isTradable, decide, closeAtMa
         ) : openPosition ? (
           <>
             <span className="pill amber sm">Already in your paper book · {openPosition.direction}</span>
-            <button className="btn ghost" onClick={closeAtMark}>CLOSE AT MARK</button>
+            <button className="btn ghost" onClick={() => closeAtMark(openPosition.id)}>CLOSE AT MARK</button>
             <a className="btn ghost" href={bitgetUrl} target="_blank" rel="noreferrer noopener">
               <ExternalLink size={12} /> View on Bitget
             </a>
@@ -1589,6 +1622,76 @@ function ActionSummaryCard({ report, openPosition, isTradable, decide, closeAtMa
         </p>
       )}
     </aside>
+  )
+}
+
+/**
+ * Short-term + long-term thesis panel with a "Download research card" action.
+ * Both fields are provided by the Qwen narration; a deterministic fallback is
+ * used when the LLM is off.
+ */
+function ThesisAndCardBlock({ report }) {
+  const [showCard, setShowCard] = useState(false)
+  const th = report.thesis || {}
+  const shortThesis = th.short || (report.signal?.catalyst ? `Near term: ${report.signal.catalyst}` : 'Near term: no immediate catalyst on file.')
+  const longThesis  = th.long  || 'Multi-week: watch macro regime and the invalidation levels below.'
+  return (
+    <section className="thesis-block">
+      <div className="thesis-row">
+        <div className="thesis-cell thesis-short">
+          <small><i className="dot red" /> SHORT-TERM · HOURS TO DAYS</small>
+          <p>{shortThesis}</p>
+        </div>
+        <div className="thesis-cell thesis-long">
+          <small><i className="dot green" /> LONG-TERM · WEEKS TO MONTHS</small>
+          <p>{longThesis}</p>
+        </div>
+      </div>
+      <div className="thesis-actions">
+        <button className="btn ghost sm" onClick={() => setShowCard(v => !v)}>
+          {showCard ? 'Hide research card' : 'Download research card'}
+        </button>
+        <span className="thesis-actions-hint">Shareable PNG · includes both thesis horizons, verdict, plan and disclaimer.</span>
+      </div>
+      {showCard && <ResearchCardActions report={report} />}
+    </section>
+  )
+}
+
+/* --------------------------------------------------- Earnings calendar strip */
+
+/**
+ * Compact "next US-equity earnings" strip for the Research page. Free NASDAQ
+ * calendar; cached server-side for 12h. Click a ticker to auto-research it.
+ */
+function EarningsStrip({ onAsk }) {
+  const [rows, setRows] = useState(null)
+  useEffect(() => {
+    if (!hasApi()) return
+    let alive = true
+    fetch(apiUrl('/earnings?limit=6'), { signal: AbortSignal.timeout(15000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(body => { if (alive) setRows(body?.rows || []) })
+      .catch(() => { if (alive) setRows([]) })
+    return () => { alive = false }
+  }, [])
+  if (!hasApi() || rows == null) return null
+  if (rows.length === 0) return null
+  return (
+    <div className="earnings-strip">
+      <span className="earnings-strip-label"><CalendarClock size={11} /> UPCOMING EARNINGS</span>
+      {rows.map(r => {
+        const isSoon = r.daysToNext != null && r.daysToNext <= 7
+        return (
+          <button className={`earnings-chip${isSoon ? ' hot' : ''}`} key={r.symbol} onClick={() => onAsk?.(r.symbol)}>
+            <b>{r.symbol}</b>
+            <em>{r.daysToNext != null ? `${r.daysToNext}d` : r.nextEarningsDate || '—'}</em>
+            {r.epsEstimate != null && <span className="earnings-eps">est ${Number(r.epsEstimate).toFixed(2)}</span>}
+          </button>
+        )
+      })}
+      <span className="earnings-strip-source">nasdaq · consensus EPS</span>
+    </div>
   )
 }
 
@@ -1657,20 +1760,20 @@ function AuthGate() {
               <small>AI TRADING DESK</small>
             </div>
           </div>
-          <div className="auth-target">FOR EVENT-DRIVEN &amp; INFORMATION-HEAVY TRADERS</div>
+          <div className="auth-target">Built for event-driven traders in tokenized U.S. stocks</div>
           <h1>Your AI trading desk.</h1>
-          <p className="auth-tagline">One question. Multiple market sources. One decision-ready thesis.</p>
-          <p className="auth-lead">Ask in plain English. NIGHTWATCH researches the data, connects the signals and stress-tests the thesis. You make the call.</p>
+          <p className="auth-tagline">Tokenized U.S. equities on Bitget — NVDA, TSLA, AAPL, MSFT, META, AMD, COIN, MSTR — plus a crypto correlation set. Research the news, not just the chart.</p>
+          <p className="auth-lead">Ask a market question in plain English. NIGHTWATCH consolidates live Bitget R-pair prices for tokenized U.S. stocks, cross-venue funding, order-book depth, macro context and symbol-tagged news, then produces a structured research report with a clear verdict, entry, stop and target. You decide whether to trade.</p>
           <ul className="auth-perks">
-            <li><ShieldCheck size={14} /> <span><b>Research that remembers.</b> Your watchlist, reports, theses and paper trades stay connected to your desk.</span></li>
-            <li><ShieldCheck size={14} /> <span><b>Real market data end-to-end.</b> Bitget market data, funding, order-book depth, macro and news power the research workflow.</span></li>
-            <li><ShieldCheck size={14} /> <span><b>Your decision stays yours.</b> NIGHTWATCH researches and stress-tests the thesis. You decide whether to trade.</span></li>
+            <li><ShieldCheck size={14} /> <span><b>A research workspace that remembers.</b> Watchlist, reports, theses and paper positions are tied to your account and follow you across every device.</span></li>
+            <li><ShieldCheck size={14} /> <span><b>Real market data, end to end.</b> Live Bitget spot prices, cross-venue perpetual funding and open interest, cached candles, macro tape and symbol-tagged news — nothing simulated.</span></li>
+            <li><ShieldCheck size={14} /> <span><b>Your judgment stays in the loop.</b> NIGHTWATCH researches, synthesizes and stress-tests. You approve, reject, or sit out — nothing trades on its own.</span></li>
           </ul>
           <div className="auth-marquee"><AuthTicker /></div>
         </div>
         <div className="auth-form">
           <SignInWidget onSignedIn={(u) => setUser(u)} />
-          <p className="auth-footnote">Paper trading only · human always makes the final decision · no live orders routed without explicit trader approval.</p>
+          <p className="auth-footnote">Paper trading by default. The trader makes every decision. Live order routing requires an approved broker connection and explicit per-order approval.</p>
         </div>
       </div>
     )

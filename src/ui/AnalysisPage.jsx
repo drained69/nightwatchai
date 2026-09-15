@@ -10,13 +10,13 @@
  * Defaults to US equities (NVDA/TSLA/AAPL/MSFT/AMZN/GOOGL/META/AMD/COIN/MSTR)
  * because that's the desk's primary focus.
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivitySquare, ArrowUpRight, ArrowDownRight, BrainCircuit,
   ExternalLink, LineChart, Newspaper, RefreshCw, ShieldCheck, TrendingUp, Zap,
 } from 'lucide-react'
 import { hasApi, apiUrl } from './apiBase.js'
-import { bitgetTradeUrl, fmtPct, fmtPrice } from '../domain.js'
+import { bitgetTradeUrl, fmtPct, fmtPrice, safeUrl } from '../domain.js'
 
 // US equities pinned first — this desk's primary universe.
 const US_EQUITIES = ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'COIN', 'MSTR']
@@ -40,22 +40,42 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
   const [error, setError] = useState(null)
   const [assetClass, setAssetClass] = useState('EQUITY')   // EQUITY | CRYPTO
 
+  // Abort/supersede in-flight loads: without this a slow response for the
+  // previously selected symbol can land after a fast one and paint mislabeled
+  // prices (new symbol header, old symbol data).
+  const abortRef = useRef(null)
+  const wantedRef = useRef(symbol)
+  wantedRef.current = symbol
+
   const load = async (sym) => {
     if (!hasApi()) { setError('Analysis workbench needs the adapter online.'); return }
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const timeout = setTimeout(() => ctrl.abort(), 35000)
     setLoading(true); setError(null)
     try {
-      const res = await fetch(apiUrl(`/analysis/${sym}`), { signal: AbortSignal.timeout(35000) })
+      const res = await fetch(apiUrl(`/analysis/${sym}`), { signal: ctrl.signal })
       if (!res.ok) throw new Error(`analysis unavailable (${res.status})`)
       const body = await res.json()
+      if (sym !== wantedRef.current) return   // user switched symbols mid-flight
       setData(body)
     } catch (err) {
+      if (ctrl.signal.aborted || sym !== wantedRef.current) return
       setError(err.message || 'analysis failed')
     } finally {
-      setLoading(false)
+      clearTimeout(timeout)
+      if (sym === wantedRef.current) setLoading(false)
     }
   }
 
-  useEffect(() => { load(symbol) }, [symbol])
+  useEffect(() => {
+    // Symbol changed — drop the previous symbol's data so the loading state
+    // renders instead of stale prices under the new symbol's header.
+    setData(null); setError(null)
+    load(symbol)
+    return () => abortRef.current?.abort()
+  }, [symbol])
   // Refresh live facts every 45s — the AI synthesis stays cached; only re-fetch on user action.
   useEffect(() => {
     if (!hasApi()) return
@@ -123,6 +143,12 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
             </div>
           </div>
           <div className="ah-right row-actions">
+            {data?.earnings?.daysToNext != null && (
+              <span className={`pill mini ${data.earnings.daysToNext <= 7 ? 'red' : data.earnings.daysToNext <= 21 ? 'amber' : 'outline'}`}>
+                📅 earnings in {data.earnings.daysToNext}d
+                {data.earnings.epsEstimate != null && ` · est $${Number(data.earnings.epsEstimate).toFixed(2)}`}
+              </span>
+            )}
             <span className="pill outline mini">24h vol · {fmtUsd(t.volumeUsd24h)}</span>
             <span className="pill outline mini">spread · {fmtBps(t.spreadBps)}</span>
             <span className="pill outline mini">high · ${fmtPrice(t.high24h)}</span>
@@ -254,7 +280,7 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
           <ul className="dense related-news" style={{ padding: '10px 14px' }}>
             {data.news.map((n, i) => (
               <li key={n.id || i}>
-                <a href={n.url} target="_blank" rel="noreferrer noopener" className="related-headline">{n.headline}</a>
+                <a href={safeUrl(n.url)} target="_blank" rel="noreferrer noopener" className="related-headline">{n.headline}</a>
                 <em className="related-meta">{n.source} · {String(n.publishedAt || '').slice(5, 16).replace('T', ' ')} UTC · {n.severity} sev</em>
               </li>
             ))}

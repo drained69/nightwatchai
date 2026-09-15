@@ -52,7 +52,7 @@ http.createServer = (handler) => {
 await import('./adapter.mjs')
 http.createServer = originalCreate    // restore
 
-const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer', '/analysis']
+const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/leaderboard', '/assayer', '/analysis', '/errors', '/earnings']
 
 function isApi(pathname) { return API_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/')) }
 
@@ -61,7 +61,7 @@ function serveStatic(req, res) {
   let file = parsed.pathname === '/' ? '/index.html' : parsed.pathname
   const abs = path.resolve(DIST + file)
   // Prevent directory traversal
-  if (!abs.startsWith(DIST)) { res.writeHead(403); res.end('forbidden'); return }
+  if (abs !== DIST && !abs.startsWith(DIST + path.sep)) { res.writeHead(403); res.end('forbidden'); return }
   fs.stat(abs, (err, stat) => {
     if (err || !stat.isFile()) {
       // SPA fallback: any unknown path → index.html so client router handles it

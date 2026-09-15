@@ -903,7 +903,7 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 
 /* --------------------------------------------------- Sign-in widget */
 .signin-panel { padding: 26px !important; border: 1px solid var(--line-soft); background: var(--panel); box-shadow: 0 1px 0 var(--line-soft), 0 0 0 5px rgba(18, 53, 40, 0.02) }
-.signin-panel .panel-head { padding: 0 0 18px !important; margin-bottom: 4px }
+.signin-panel .panel-head { padding: 0 0 18px !important; margin-bottom: 4px; display: block !important; background: transparent !important; border-bottom: 1px solid var(--line-soft) !important }
 .signin-panel .panel-head h3 { font-family: 'DM Serif Display', serif; font-weight: 400; font-size: 24px; letter-spacing: -0.3px; color: var(--text); margin: 0 }
 .signin-panel .panel-head small { display: block; margin-top: 6px; font: 500 12px/1.4 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: 0; color: var(--muted); text-transform: none }
 .signin-panel .panel-head small b { color: var(--text); font-weight: 600 }
@@ -1072,3 +1072,84 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   box-shadow: 0 0 0 3px rgba(11, 111, 71, 0.18);
 }
 .auth-lead em { font-style: italic; color: var(--text) }
+
+/* --------------------------------------------------- Thesis panel + card download */
+.thesis-block { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 12px }
+.thesis-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px }
+.thesis-cell { padding: 14px 18px; border: 1px solid var(--line-soft); background: var(--panel-2) }
+.thesis-cell small { display: flex; align-items: center; gap: 6px; font: 600 10px 'IBM Plex Mono'; letter-spacing: 1.3px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px }
+.thesis-cell p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text) }
+.thesis-short { border-left: 3px solid var(--down) }
+.thesis-long  { border-left: 3px solid var(--up) }
+.thesis-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap }
+.thesis-actions-hint { font-size: 11px; color: var(--muted); font-style: italic }
+.card-download-actions { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line-soft); background: var(--panel) }
+.card-download-preview { width: 100%; max-width: 100%; overflow: hidden; border: 1px solid var(--line-soft); background: var(--bg) }
+.card-download-preview svg { display: block; width: 100%; height: auto }
+.card-download-buttons { display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
+.card-download-hint { font-size: 11px; color: var(--muted); font-style: italic; flex: 1 }
+@media (max-width: 900px) {
+  .thesis-row { grid-template-columns: 1fr }
+}
+
+/* --------------------------------------------------- Leaderboard */
+.leaderboard-table { display: flex; flex-direction: column }
+.lb-head, .lb-row {
+  display: grid;
+  grid-template-columns: 40px 1.9fr 1fr 0.8fr 0.7fr 0.5fr 0.7fr 0.9fr 0.8fr 60px;
+  align-items: center; gap: 10px;
+  padding: 10px 20px;
+  min-width: 980px;
+  font: 500 12px 'IBM Plex Mono', ui-monospace, monospace;
+}
+.lb-head {
+  background: var(--panel-2);
+  border-bottom: 1.5px solid var(--line);
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.3px; text-transform: uppercase; color: var(--muted);
+}
+.lb-row { border-bottom: 1px dotted var(--line-soft); color: var(--text-2) }
+.lb-row:hover { background: rgba(165, 35, 42, 0.02) }
+.lb-title { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.lb-title b { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.lb-title small { font-size: 10px }
+.lb-asset { display: inline-flex; align-items: center; gap: 8px }
+.lb-empty { padding: 40px 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--text-2) }
+.lb-empty b { font: 400 20px 'DM Serif Display', serif; color: var(--text) }
+.lb-empty p { max-width: 520px; font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0 }
+.filter-label { font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); align-self: center; margin-right: 4px }
+
+/* --------------------------------------------------- Earnings strip */
+.earnings-strip {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel-2);
+  margin-top: 8px;
+}
+.earnings-strip-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted);
+  margin-right: 4px;
+}
+.earnings-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel);
+  cursor: pointer;
+  font: 500 11px 'IBM Plex Mono', ui-monospace, monospace;
+  color: var(--text-2);
+  transition: border-color 120ms ease, color 120ms ease;
+  border-radius: 2px;
+}
+.earnings-chip:hover { border-color: var(--line); color: var(--text) }
+.earnings-chip.hot   { border-color: var(--amber); color: var(--amber); background: rgba(163, 117, 40, 0.08) }
+.earnings-chip b { font-weight: 700; letter-spacing: 0.4px }
+.earnings-chip em { font-style: normal; color: var(--muted); font-size: 10px }
+.earnings-chip.hot em { color: var(--amber) }
+.earnings-eps { font-size: 10px; color: var(--muted); margin-left: 2px }
+.earnings-strip-source {
+  margin-left: auto;
+  font: 500 9px 'IBM Plex Mono'; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--muted);
+}

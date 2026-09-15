@@ -41,7 +41,7 @@ export async function chat({ messages = [], intent = 'chat', llm } = {}) {
   const last = messages[messages.length - 1]?.content || ''
   if (llm?.enabled) {
     const prompt = [SYSTEM, '', 'Conversation so far:'].concat(
-      messages.map(m => `${m.role.toUpperCase()}: ${m.content}`),
+      messages.map(m => `${String(m?.role || 'user').toUpperCase()}: ${String(m?.content || '').slice(0, 4000)}`),
       ['', 'Reply as The Assayer. Return JSON: {"reply": "<your prose reply, keep concise>", "playbook": <optional playbook object>}']
     ).join('\n')
     const out = await llm.jsonComplete(prompt).catch(() => null)

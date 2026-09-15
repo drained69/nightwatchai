@@ -163,8 +163,11 @@ export async function getSpotBookDepth(symbol) {
   if (hit) return hit
   const raw = await bitgetGetBook(symbol, 15)
   if (!raw) return null
-  const bids = raw.bids || []
-  const asks = raw.asks || []
+  // Defensive: if the upstream cache ever returns a mangled shape (e.g. a
+  // stale-shelf fallback that spread arrays into indexed objects), refuse to
+  // crash the /book/{sym} endpoint — just report no book.
+  const bids = Array.isArray(raw.bids) ? raw.bids : []
+  const asks = Array.isArray(raw.asks) ? raw.asks : []
   const bestBid = bids[0]?.price
   const bestAsk = asks[0]?.price
   const spreadBps = bestBid && bestAsk ? ((bestAsk - bestBid) / bestAsk) * 10000 : null

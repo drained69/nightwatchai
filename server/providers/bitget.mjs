@@ -84,17 +84,27 @@ function getStale(key) {
   return value
 }
 
-async function fetchJson(url, { retries = 1 } = {}) {
+async function fetchJson(url, { retries = 3 } = {}) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(BITGET_TIMEOUT_MS) })
+      const response = await fetch(url, {
+        // Some CDN/edge configs 403 requests without a browser-like UA. Shared
+        // cloud IPs (Railway, etc.) are especially prone to this on the
+        // per-symbol candles/orderbook endpoints.
+        headers: { 'User-Agent': 'Mozilla/5.0 NightwatchAI/1.1 (research; +https://nightwatchai.watch)' },
+        signal: AbortSignal.timeout(BITGET_TIMEOUT_MS),
+      })
       if (!response.ok) {
-        if (response.status === 429 && attempt < retries) { await new Promise(r => setTimeout(r, 400)); continue }
+        // Exponential backoff on 429 (rate limit) and 5xx: 400ms → 800ms → 1600ms.
+        if ((response.status === 429 || response.status >= 500) && attempt < retries) {
+          await new Promise(r => setTimeout(r, 400 * (2 ** attempt)))
+          continue
+        }
         return null
       }
       return await response.json()
     } catch {
-      if (attempt < retries) { await new Promise(r => setTimeout(r, 250)); continue }
+      if (attempt < retries) { await new Promise(r => setTimeout(r, 250 * (2 ** attempt))); continue }
       return null
     }
   }
@@ -152,6 +162,8 @@ export async function getAllTickers() {
       low24h:       Number(row.low24h),
       changePct24h: Number(row.change24h) * 100,
       volumeUsd24h: Number(row.quoteVolume),
+      bidPrice:     row.bidPr ? Number(row.bidPr) : null,
+      askPrice:     row.askPr ? Number(row.askPr) : null,
       spreadBps:    row.bidPr && row.askPr ? ((Number(row.askPr) - Number(row.bidPr)) / Number(row.askPr)) * 10000 : null,
       ts:           Number(row.ts),
       source:       'bitget-public-rest',
@@ -201,6 +213,11 @@ export async function getBook(symbol, depth = 5) {
   const body = await fetchJson(`${BITGET_BASE}/api/v2/spot/market/orderbook?symbol=${pair}&limit=${depth}&type=step0`)
   if (!body?.data) return getStale(key)
   const value = {
+    // `symbol` field is required so getStale() routes this through the
+    // single-record branch on fallback — otherwise its "tickers map" fallback
+    // would spread the bids/asks arrays into indexed objects and downstream
+    // .reduce() calls would throw "bids.reduce is not a function".
+    symbol: pair,
     bids: body.data.bids?.map(([p, s]) => ({ price: Number(p), size: Number(s) })) || [],
     asks: body.data.asks?.map(([p, s]) => ({ price: Number(p), size: Number(s) })) || [],
     ts: Number(body.data.ts),
@@ -211,9 +228,12 @@ export async function getBook(symbol, depth = 5) {
   return value
 }
 
-/** Compute technical indicators from real candles. Returns null if no data. */
-export async function computeIndicators(symbol) {
-  const candles = await getCandles(symbol, '1h', 200)
+/** Compute technical indicators from real candles. Returns null if no data.
+ *  Callers may pass pre-loaded candles (e.g. from the disk history cache) to
+ *  bypass the live Bitget fetch — useful when the R-pair endpoints are being
+ *  rate-limited from a shared cloud IP. */
+export async function computeIndicators(symbol, providedCandles = null) {
+  const candles = providedCandles || await getCandles(symbol, '1h', 200)
   if (!candles || candles.length < 50) return null
   const closes = candles.map(c => c.close)
   const highs  = candles.map(c => c.high)

@@ -339,7 +339,19 @@ const server = http.createServer(async (req, res) => {
     }
     if (route.startsWith('GET /prices/indicators/')) {
       const symbol = url.pathname.split('/').pop().toUpperCase()
-      const ind = await computeIndicators(symbol)
+      let ind = await computeIndicators(symbol)
+      // Fallback: when Bitget rate-limits the R-pair candles endpoint from a
+      // shared cloud IP, serve indicators from the disk history cache which
+      // was warmed at boot. This keeps the endpoint honest and useful even
+      // during transient upstream throttling.
+      if (!ind) {
+        const h = loadHistory(symbol)
+        if (h?.candles?.length >= 50) {
+          const recent = h.candles.slice(-200)
+          ind = await computeIndicators(symbol, recent)
+          if (ind) ind.source = 'nightwatch-history-cache'
+        }
+      }
       if (!ind) return json(res, 404, { error: `no indicators for ${symbol}` })
       return json(res, 200, ind)
     }
@@ -419,7 +431,25 @@ const server = http.createServer(async (req, res) => {
     }
     if (route.startsWith('GET /book/')) {
       const symbol = url.pathname.split('/').pop().toUpperCase()
-      const b = await getSpotBookDepth(symbol)
+      let b = await getSpotBookDepth(symbol)
+      // Fallback: when Bitget rate-limits the per-symbol orderbook, derive
+      // top-of-book from the bulk /tickers cache (different rate bucket, still
+      // real data). Depth USD is null in this mode — the source stamp
+      // 'bitget-ticker-only' tells the client it's a lightweight shape.
+      if (!b) {
+        const all = await getAllTickers().catch(() => null)
+        const t = all?.[symbol]
+        if (t?.bidPrice && t?.askPrice) {
+          const spreadBps = ((t.askPrice - t.bidPrice) / t.askPrice) * 10000
+          b = {
+            symbol,
+            bestBid: t.bidPrice, bestAsk: t.askPrice,
+            spreadBps: Number(spreadBps.toFixed(2)),
+            bidLiquidityUsd: null, askLiquidityUsd: null, depthImbalance: null,
+            live: true, source: 'bitget-ticker-only', at: Date.now(),
+          }
+        }
+      }
       if (!b) return json(res, 404, { error: `no book for ${symbol}` })
       return json(res, 200, b)
     }
@@ -457,7 +487,7 @@ const server = http.createServer(async (req, res) => {
     if (route.startsWith('GET /analysis/')) {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
       const symbol = url.pathname.split('/').pop().toUpperCase()
-      const [ticker, indicators, depth, positioning, intel, macro, earnings] = await Promise.all([
+      let [ticker, indicators, depth, positioning, intel, macro, earnings] = await Promise.all([
         getTicker(symbol).catch(() => null),
         computeIndicators(symbol).catch(() => null),
         getSpotBookDepth(symbol).catch(() => null),
@@ -468,6 +498,38 @@ const server = http.createServer(async (req, res) => {
         // we key off the underlying ticker which matches for NVDA/TSLA/AAPL etc.).
         EARNINGS_UNIVERSE.includes(symbol) ? getEarningsFor(symbol).catch(() => null) : Promise.resolve(null),
       ])
+      // Rate-limit fallback: R-pair candles/orderbook get throttled from shared
+      // cloud IPs. When indicators are missing, fall back to the disk history
+      // cache warmed at boot so the workbench still renders real numbers.
+      if (!indicators) {
+        const h = loadHistory(symbol)
+        if (h?.candles?.length >= 50) {
+          indicators = await computeIndicators(symbol, h.candles.slice(-200)).catch(() => null)
+          if (indicators) indicators.source = 'nightwatch-history-cache'
+        }
+      }
+      // Book fallback: derive top-of-book from the bulk-tickers cache when
+      // the per-symbol orderbook (and per-symbol ticker) got rate-limited.
+      if (!depth) {
+        const bulk = await getAllTickers().catch(() => null)
+        const t = bulk?.[symbol] || ticker
+        if (t?.bidPrice && t?.askPrice) {
+          const spreadBps = ((t.askPrice - t.bidPrice) / t.askPrice) * 10000
+          depth = {
+            symbol,
+            bestBid: t.bidPrice, bestAsk: t.askPrice,
+            spreadBps: Number(spreadBps.toFixed(2)),
+            bidLiquidityUsd: null, askLiquidityUsd: null, depthImbalance: null,
+            live: true, source: 'bitget-ticker-only', at: Date.now(),
+          }
+        }
+      }
+      // Ticker fallback: fall back to the bulk-tickers cache too so the
+      // workbench header always has a price to render.
+      if (!ticker) {
+        const bulk = await getAllTickers().catch(() => null)
+        if (bulk?.[symbol]) ticker = bulk[symbol]
+      }
       if (!ticker && !indicators) return json(res, 404, { error: `no live data for ${symbol}` })
       // Filter recent news to items that reference this symbol in their affectedAssets.
       const newsItems = news.list(80).filter(it =>

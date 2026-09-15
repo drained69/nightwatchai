@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, Award, BookOpen, BrainCircuit, BarChart3,
   CalendarClock, ChevronRight, Compass, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
-  LineChart, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
+  LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
 import './styles.css'
@@ -486,15 +486,26 @@ function App({ authUser: signedInUser, onSignedOut }) {
           </div>
           <div className="hint"><Cpu size={11} /> {session.provider.engine} · {session.reports?.length || 0} reports</div>
           {authUser && (
-            <div className="account-strip">
-              <div className="account-info">
-                <div className="account-avatar">{(authUser.name || authUser.email || '?').slice(0, 1).toUpperCase()}</div>
-                <div>
-                  <b>{authUser.name || authUser.email?.split('@')[0]}</b>
-                  <small>{authUser.email}</small>
-                </div>
+            <div className="account-strip" role="group" aria-label="Account">
+              <div className="account-avatar" aria-hidden="true">
+                {(authUser.name || authUser.email || '?').slice(0, 1).toUpperCase()}
               </div>
-              <button className="chip mini" onClick={() => { if (confirm('Sign out?')) onSignedOut?.() }}>SIGN OUT</button>
+              <div className="account-info">
+                <small className="account-label">Signed in as</small>
+                <b className="account-name" title={authUser.name || authUser.email}>
+                  {authUser.name || authUser.email?.split('@')[0]}
+                </b>
+                <small className="account-email" title={authUser.email}>{authUser.email}</small>
+              </div>
+              <button
+                type="button"
+                className="account-signout"
+                onClick={() => { if (confirm('Sign out of NIGHTWATCH AI?')) onSignedOut?.() }}
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                <LogOut size={14} />
+              </button>
             </div>
           )}
         </div>

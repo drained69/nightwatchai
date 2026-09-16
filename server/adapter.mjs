@@ -52,7 +52,6 @@ import { shareReport, readSharedByToken } from './sharing.mjs'
 import { analyzePortfolio, correlationToBtc } from './copilot.mjs'
 import * as Playbooks from './playbooks.mjs'
 import * as Allocations from './allocations.mjs'
-import { leaderboard as playbookLeaderboard } from './leaderboard.mjs'
 import { paperSnapshot, resetPaperAccount } from './paper.mjs'
 import { chat as assayerChat } from './assayer.mjs'
 import { buildLiveContext, liveUniverseStatus, getMacro } from './market-context.mjs'
@@ -96,7 +95,7 @@ const metrics = {
 
 if (NEWS_ENABLED) news.start()
 
-// History cache + auto-backtest of published Playbooks so the Leaderboard
+// History cache + auto-backtest of published Playbooks so Explore + detail views
 // has real numbers on first render. Runs in the background so boot is fast.
 ;(async () => {
   try {
@@ -817,13 +816,6 @@ const server = http.createServer(async (req, res) => {
       const id = url.pathname.split('/').pop()
       try { Playbooks.deletePlaybook(user.id, id); return json(res, 200, { ok: true }) }
       catch (err) { return json(res, 400, { error: err.message }) }
-    }
-
-    // Leaderboard
-    if (route === 'GET /leaderboard') {
-      const sort = url.searchParams.get('sort') || 'return'
-      const limit = limitParam(url.searchParams.get('limit'), 25, 100)
-      return json(res, 200, { rows: playbookLeaderboard({ sort, limit }) })
     }
 
     // The Assayer chat

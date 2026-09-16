@@ -10,7 +10,6 @@ const store  = await import('./store.mjs')
 const paper  = await import('../paper.mjs')
 const pb     = await import('../playbooks.mjs')
 const alloc  = await import('../allocations.mjs')
-const board  = await import('../leaderboard.mjs')
 const assayer= await import('../assayer.mjs')
 
 test.after(() => { try { fs.rmSync(process.env.NIGHTWATCH_DATA_DIR, { recursive: true, force: true }) } catch { /* ignore */ } })
@@ -93,23 +92,6 @@ test('allocations: unfollow releases capital', () => {
 test('allocations: unfollow when not allocated throws', () => {
   const u = store.createUser({ email: 'al3@t.co' })
   assert.throws(() => alloc.unfollow(u.id, 'pb-btc-etf-flow-follow'))
-})
-
-/* ---------- leaderboard ---------- */
-
-test('leaderboard: returns published playbooks with expected shape', () => {
-  const rows = board.leaderboard({ sort: 'return', limit: 10 })
-  assert.ok(rows.length >= 4)
-  for (const r of rows) {
-    assert.ok('id' in r && 'title' in r && 'asset' in r && 'followers' in r)
-  }
-})
-
-test('leaderboard: sort by followers is monotone', () => {
-  const rows = board.leaderboard({ sort: 'followers', limit: 10 })
-  for (let i = 1; i < rows.length; i++) {
-    assert.ok(rows[i - 1].followers >= rows[i].followers)
-  }
 })
 
 /* ---------- assayer ---------- */

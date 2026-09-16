@@ -88,7 +88,6 @@ The hackathon-critical claim: *AI extracts, synthesizes, and challenges; the tra
 | **Copy to paper** | Every research report shows a top-of-page **Action Summary** card — verdict, plan (entry/stop/target/size/friction), one-click **COPY TO PAPER PORTFOLIO**, plus REJECT / SIT OUT / TRADE ON BITGET |
 | **Playbooks** | Public, published strategies with real-price paper PnL — no real user funds |
 | **The Assayer** | AI chat companion that drafts Playbooks from plain-English prompts |
-| **Leaderboard** | Public ranking by followers / capital / live P&L / backtest return |
 | **Live trading (opt-in)** | Bitget Agentic Account OAuth flow + trader-gated live order path + kill switch |
 
 ### Platform
@@ -142,7 +141,6 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 | **Backtest** | Replays skill pack + signal engine over synthetic or live candles; reports precision/recall/lift. |
 | **History** | Every research report, decision, review, and session log. |
 | **Explore** | Published Playbooks with real-price paper PnL. |
-| **Leaderboard** | Public ranking by followers / capital / live P&L / backtest return. |
 | **Assayer** | AI chat companion that drafts Playbooks from plain-English prompts. |
 | **Settings** | Trader profile, watchlist, Bitget MCP connection status with setup steps. |
 
@@ -453,7 +451,7 @@ src/
   backtest.js          precision/recall/lift over synthetic or real candles (per-bar no-lookahead indicators)
   backtest.test.js     backtest tests
   main.jsx             SPA (Research · Analysis · News · Markets · Signals · Thesis Lab ·
-                       Portfolio · Backtest · History · Explore · Leaderboard · Assayer · Settings)
+                       Portfolio · Backtest · History · Explore · Assayer · Settings)
   styles.css           institutional dark terminal design
   ui/
     ErrorBoundary.jsx  panic screen + wipe-session fallback
@@ -461,7 +459,7 @@ src/
     useLiveStream.js   SSE subscription hook
     usePush.js         Web Push subscribe + test
     MarketPulse.jsx    live BTC/ETH/F&G strip
-    GetAgentPages.jsx  Explore · Leaderboard · Assayer · Playbook detail · paper account
+    GetAgentPages.jsx  Explore · Assayer · Playbook detail · paper account
 
 server/
   adapter.mjs          composed HTTP + SSE server
@@ -471,7 +469,7 @@ server/
   live-enhance.mjs     report overlay — positioning, book depth, intel, real friction
   history.mjs          deep-paged real candle cache (18 assets)
   alerts.mjs · copilot.mjs · paper.mjs · playbooks.mjs · allocations.mjs ·
-  assayer.mjs · leaderboard.mjs · sharing.mjs · signal-history.mjs
+  assayer.mjs · sharing.mjs · signal-history.mjs
   providers/
     bitget.mjs         real Bitget REST — tickers, candles, books, RSI/EMA/ATR
                        (crypto + R-pair equities), retry + stale shelf
@@ -485,7 +483,7 @@ server/
     llm.mjs · push.mjs
     lib.test.mjs       platform tests
     tier2.test.mjs     alerts · sharing · copilot tests
-    getagent.test.mjs  playbooks · allocations · paper · leaderboard tests
+    getagent.test.mjs  playbooks · allocations · paper · assayer tests
     live-data.test.mjs symbol map · classifier · live skills · live signal · backtest tests
 
 public/                manifest.webmanifest · sw.js · icons · logo

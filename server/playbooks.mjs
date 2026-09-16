@@ -7,7 +7,7 @@
  *
  * Users can create their own, publish them for others to see, and follow
  * (allocate paper capital) to other people's Playbooks. Real prices drive the
- * paper-PnL leaderboard.
+ * paper-PnL surface.
  */
 
 import fs from 'node:fs'

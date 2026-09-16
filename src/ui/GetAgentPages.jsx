@@ -1,11 +1,11 @@
 /**
- * The four GetAgent-style pages: Explore, Leaderboard, The Assayer chat, and a
- * Paper Account strip. Each hits the adapter directly via VITE_AGENT_API_URL.
+ * GetAgent-style pages: Explore, The Assayer chat, and a Paper Account strip.
+ * Each hits the adapter directly via VITE_AGENT_API_URL (falls back to same-origin).
  * If no adapter is attached, we show a friendly "connect the adapter" note.
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
-  Award, Compass, ExternalLink, Gem, MessageCircle, RotateCcw, Send, ShieldCheck, Sparkles, Wallet,
+  Compass, ExternalLink, Gem, MessageCircle, RotateCcw, Send, ShieldCheck, Sparkles, Wallet,
 } from 'lucide-react'
 import { apiBase, hasApi, apiUrl } from './apiBase.js'
 import { MarketPulse } from './MarketPulse.jsx'
@@ -170,7 +170,7 @@ export function SignInWidget({ onSignedIn }) {
   )
 }
 
-/** ---------------- Paper account strip (top of Explore + Leaderboard) ---------------- */
+/** ---------------- Paper account strip (top of Explore) ---------------- */
 
 export function PaperStrip({ user, onReset }) {
   const [paper, setPaper] = useState(null)
@@ -365,129 +365,6 @@ export function PlaybookDetail({ id, user, onClose, onAllocated }) {
   )
 }
 
-/** ---------------- Leaderboard page ---------------- */
-
-// US-equity universe used to tag rows so traders can see at a glance whether
-// a Playbook trades tokenized equities or crypto correlation.
-const EQUITY_SYMBOLS = new Set(['NVDA','TSLA','AAPL','MSFT','AMZN','GOOGL','META','AMD','COIN','MSTR'])
-
-export function LeaderboardPage({ user, onOpenPlaybook, onOpenAssayer }) {
-  const [sort, setSort] = useState('return')
-  const [assetFilter, setAssetFilter] = useState('ALL')     // ALL · EQUITY · CRYPTO
-  const [rows, setRows] = useState(null)
-
-  useEffect(() => {
-    let alive = true
-    api(`/leaderboard?sort=${sort}&limit=100`)
-      .then(r => { if (alive) setRows(Array.isArray(r.rows) ? r.rows : []) })
-      .catch(() => { if (alive) setRows([]) })
-    return () => { alive = false }
-  }, [sort])
-
-  const filtered = useMemo(() => {
-    if (!rows) return rows
-    if (assetFilter === 'EQUITY') return rows.filter(r => EQUITY_SYMBOLS.has(r.asset))
-    if (assetFilter === 'CRYPTO') return rows.filter(r => !EQUITY_SYMBOLS.has(r.asset))
-    return rows
-  }, [rows, assetFilter])
-
-  if (!hasApi()) return <div className="empty-report"><b>Adapter not attached</b></div>
-
-  const fmtPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(digits)}%`
-  const fmtCap = (n) => `$${Math.round(n || 0).toLocaleString()}`
-
-  return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <div className="eyebrow"><Award size={12} /> LEADERBOARD · REAL-PRICE PAPER P&amp;L · REAL FOLLOWERS</div>
-          <h1>Playbook leaderboard</h1>
-          <p className="lead">Every Playbook published by a real user, ranked on real backtests over cached Bitget 1h candles and marked-to-market against real live prices. No simulated volume, no fake followers.</p>
-        </div>
-        <div className="row-actions">
-          {onOpenAssayer && (
-            <button className="btn primary sm" onClick={onOpenAssayer}>
-              <Sparkles size={12} /> Draft a Playbook in the Assayer
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="filter-row" style={{ marginTop: 8 }}>
-        <span className="filter-label">Sort</span>
-        {[['return', 'Total return'], ['live', 'Live P&L'], ['followers', 'Followers'], ['capital', 'Capital allocated'], ['recent', 'Most recent']].map(([k, l]) => (
-          <button key={k} className={sort === k ? 'chip on' : 'chip'} onClick={() => setSort(k)}>{l}</button>
-        ))}
-        <span className="filter-label" style={{ marginLeft: 20 }}>Universe</span>
-        {[['ALL', 'All'], ['EQUITY', 'U.S. equities'], ['CRYPTO', 'Crypto']].map(([k, l]) => (
-          <button key={k} className={assetFilter === k ? 'chip on' : 'chip'} onClick={() => setAssetFilter(k)}>{l}</button>
-        ))}
-      </div>
-
-      <MarketPulse />
-      {user ? <PaperStrip user={user} /> : null}
-
-      <div className="panel">
-        <div className="panel-head"><h3>Ranked playbooks</h3><small>{filtered ? `${filtered.length} of ${rows.length}` : '—'}</small></div>
-        <div className="leaderboard-table">
-          <div className="lb-head">
-            <span>#</span>
-            <span>Playbook</span>
-            <span>Asset</span>
-            <span>Return</span>
-            <span>Win rate</span>
-            <span>Trades</span>
-            <span>Followers</span>
-            <span>Allocated</span>
-            <span>Live P&amp;L</span>
-            <span></span>
-          </div>
-          {filtered == null ? (
-            <div className="empty-body">loading real-price backtests…</div>
-          ) : filtered.length === 0 ? (
-            <div className="lb-empty">
-              <b>No Playbooks{assetFilter === 'EQUITY' ? ' for U.S. equities' : assetFilter === 'CRYPTO' ? ' for crypto' : ''} yet.</b>
-              <p>Playbooks are published strategies that anyone can follow with paper capital. Backtests run on real cached Bitget 1h candles; the leaderboard populates as soon as the first Playbook publishes.</p>
-              {onOpenAssayer ? (
-                <button className="btn primary" onClick={onOpenAssayer}><Sparkles size={13} /> Draft your first Playbook</button>
-              ) : null}
-            </div>
-          ) : filtered.map((r, i) => {
-            const isEquity = EQUITY_SYMBOLS.has(r.asset)
-            return (
-              <div className="lb-row" key={r.id}>
-                <b className="mono muted">{i + 1}</b>
-                <div className="lb-title">
-                  <b>{r.title}</b>
-                  <small className="muted">
-                    {r.ownerName || '—'} · {new Date(r.createdAt).toISOString().slice(0, 10)}
-                    {r.backtestable === false && (
-                      <em className="pill outline mini" style={{ marginLeft: 6 }} title={`Requires live-only fields: ${(r.backtestMissing || []).join(', ')}`}>
-                        live-context only
-                      </em>
-                    )}
-                  </small>
-                </div>
-                <span className="lb-asset">
-                  <b className="mono">{r.asset}</b>
-                  <em className={isEquity ? 'pill green mini' : 'pill outline mini'}>{isEquity ? 'Equity' : 'Crypto'}</em>
-                </span>
-                <b className={r.totalReturnPct == null ? 'mono muted' : r.totalReturnPct >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.totalReturnPct)}</b>
-                <b className="mono">{r.winRate == null ? '—' : `${(r.winRate * 100).toFixed(0)}%`}</b>
-                <span className="mono muted">{r.tradeCount || 0}</span>
-                <b className="mono">{r.followers}</b>
-                <b className="mono">{fmtCap(r.totalAllocatedUsd)}</b>
-                <b className={r.livePnlPct == null ? 'mono muted' : r.livePnlPct >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.livePnlPct, 2)}</b>
-                <button className="chip mini" onClick={() => onOpenPlaybook(r.id)}>Open</button>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /** ---------------- The Assayer chat page ---------------- */
 
 export function AssayerPage({ user, onAllocated }) {
@@ -522,7 +399,7 @@ export function AssayerPage({ user, onAllocated }) {
       const r = await api('/playbooks', { method: 'POST', token, body: JSON.stringify(proposed) })
       await api(`/playbooks/${r.playbook.id}/publish`, { method: 'POST', token, body: JSON.stringify({ publish: true }) })
       setSavedId(r.playbook.id)
-      setMessages(m => [...m, { role: 'assistant', content: `Saved and published. Playbook id ${r.playbook.id}. Head to Leaderboard to see it live.` }])
+      setMessages(m => [...m, { role: 'assistant', content: `Saved and published. Playbook id ${r.playbook.id}. Open it in Explore to allocate paper capital.` }])
       setProposed(null)
       onAllocated?.()
     } catch (err) {

@@ -38,7 +38,7 @@ export function paperAccount(userId) {
   if (existing.startingCapital !== STARTING) {
     // Rebase to the current starting capital. Keep the allocation the account
     // already holds against Playbooks so the user's followed positions don't
-    // silently disappear, but wipe realized PnL so the leaderboard is fair.
+    // silently disappear, but wipe realized PnL so every account restarts on equal footing.
     const allocated = Math.max(0, Number(existing.allocatedCapital) || 0)
     const pa = {
       startingCapital: STARTING,

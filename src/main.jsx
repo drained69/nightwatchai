@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, Award, BookOpen, BrainCircuit, BarChart3,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
   CalendarClock, ChevronRight, Compass, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
@@ -29,7 +29,7 @@ function applyLiveTickers(rows, tickers) {
   })
 }
 import { runBacktestSynthetic } from './backtest.js'
-import { AssayerPage, ExplorePage, LeaderboardPage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
+import { AssayerPage, ExplorePage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
 import { ResearchCardActions } from './ui/ResearchCard.jsx'
@@ -47,7 +47,6 @@ const NAV = [
   { id: 'analysis',    label: 'Analysis',    icon: Crosshair },
   { id: 'assayer',     label: 'The Assayer', icon: MessageCircle },
   { id: 'explore',     label: 'Explore',     icon: Compass },
-  { id: 'leaderboard', label: 'Leaderboard', icon: Award },
   { id: 'news',        label: 'News',        icon: Newspaper },
   { id: 'markets',     label: 'Markets',     icon: ScanLine },
   { id: 'signals',     label: 'Signals',     icon: Radio },
@@ -553,10 +552,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
             ? <ExplorePage user={authUser} onOpenPlaybook={setOpenPlaybookId} />
             : <div className="page"><SignInWidget onSignedIn={(u) => setAuthUser(u)} /><ExplorePage user={null} onOpenPlaybook={setOpenPlaybookId} /></div>
         )}
-        {page === 'leaderboard' && <LeaderboardPage user={authUser} onOpenPlaybook={setOpenPlaybookId} onOpenAssayer={() => setPage('assayer')} />}
         {page === 'assayer'   && (
           authUser
-            ? <AssayerPage user={authUser} onAllocated={() => setPage('leaderboard')} />
+            ? <AssayerPage user={authUser} onAllocated={() => setPage('portfolio')} />
             : <div className="page"><SignInWidget onSignedIn={(u) => setAuthUser(u)} /><AssayerPage user={null} /></div>
         )}
         {openPlaybookId && <PlaybookDetail id={openPlaybookId} user={authUser} onClose={() => setOpenPlaybookId(null)} onAllocated={() => { setOpenPlaybookId(null); notify('Paper allocation updated') }} />}

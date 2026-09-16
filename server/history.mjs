@@ -4,7 +4,7 @@
  * Fetches hourly candles for every universe asset — crypto majors AND the
  * R-prefixed tokenized equities — and stores them at
  * `NIGHTWATCH_DATA_DIR/history/<symbol>.json`. Used by the backtester, the
- * playbook leaderboard, and the portfolio copilot's BTC correlations.
+ * playbook Explore surface, and the portfolio copilot's BTC correlations.
  *
  * First warm pages backwards (endTime pagination) up to HISTORY_WARM_CANDLES;
  * later refreshes merge only the newest candles. On boot: warm once in the

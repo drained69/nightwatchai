@@ -3,7 +3,7 @@
  *
  * Polls the adapter for real BTC + ETH tickers, Fear & Greed, and BTC ETF net
  * flow. Refreshes every 15s. Shows an "adapter offline" note if no fetch
- * succeeds. Used across Research, Explore, and Leaderboard pages.
+ * succeeds. Used across Research and Explore pages.
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Activity, TrendingUp } from 'lucide-react'

@@ -11,15 +11,49 @@ import { logger } from './lib/log.mjs'
 
 const STARTING = Number(process.env.PAPER_STARTING_CAPITAL || 10000)
 
+/**
+ * Fetch (or create) a user's paper account. Every account is seeded with the
+ * configured STARTING capital (default $10,000). If a legacy account exists
+ * with a different starting capital — a dev account from before this rule was
+ * standardised, or an account created under an old env var — it is migrated
+ * up (or down) so that every user is on an equal footing.
+ *
+ * Migration rules:
+ *   - No paperAccount     → issue a fresh $STARTING account.
+ *   - Wrong starting cap  → rebase to $STARTING, preserving current PnL and
+ *                            proportional allocation (allocatedCapital never
+ *                            goes below 0). This is deliberate: we want
+ *                            *every* account to start from $10K, even if the
+ *                            user has already used the app.
+ */
 export function paperAccount(userId) {
   const user = getUser(userId)
   if (!user) return null
-  if (!user.paperAccount) {
+  const existing = user.paperAccount
+  if (!existing) {
     const pa = { startingCapital: STARTING, freeCapital: STARTING, allocatedCapital: 0, totalPnl: 0, createdAt: new Date().toISOString() }
     const next = upsertUser({ ...user, paperAccount: pa })
     return next.paperAccount
   }
-  return user.paperAccount
+  if (existing.startingCapital !== STARTING) {
+    // Rebase to the current starting capital. Keep the allocation the account
+    // already holds against Playbooks so the user's followed positions don't
+    // silently disappear, but wipe realized PnL so the leaderboard is fair.
+    const allocated = Math.max(0, Number(existing.allocatedCapital) || 0)
+    const pa = {
+      startingCapital: STARTING,
+      allocatedCapital: Math.min(allocated, STARTING),
+      freeCapital: Number(Math.max(0, STARTING - Math.min(allocated, STARTING)).toFixed(2)),
+      totalPnl: 0,
+      createdAt: existing.createdAt || new Date().toISOString(),
+      rebasedAt: new Date().toISOString(),
+      previousStartingCapital: existing.startingCapital,
+    }
+    logger.info({ userId, from: existing.startingCapital, to: STARTING }, 'paper account rebased to standard $10K starting capital')
+    const next = upsertUser({ ...user, paperAccount: pa })
+    return next.paperAccount
+  }
+  return existing
 }
 
 /** Reserve capital for an allocation. Throws if insufficient. */

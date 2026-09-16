@@ -115,11 +115,13 @@ function hashCode(code, salt) {
 /**
  * Ask for a 6-digit sign-in code to be sent to `email`. Idempotent within the
  * throttle window — a rapid re-request keeps the same live code.
- * Returns { sent, throttled?: boolean, previewCode?: string }
- *   previewCode is included ONLY when email delivery isn't configured — for
- *   local dev, we can't send email so we return the code inline. In production
- *   Resend or SMTP MUST be configured; otherwise the endpoint refuses to
- *   handle new users.
+ * Returns { sent, throttled?, retryInMs?, transport, previewCode? }
+ *
+ * previewCode is ONLY returned in `development` mode with no Resend key set
+ * (local machine, no email provider) — this lets a developer test the flow
+ * without wiring email. In production, the code is never returned to the
+ * client under any circumstances; if delivery fails the request throws so the
+ * client shows a real error instead of leaking the code on screen.
  */
 export async function requestSignInCode({ email }) {
   const norm = validateEmail(email)
@@ -132,9 +134,23 @@ export async function requestSignInCode({ email }) {
   const salt = crypto.randomBytes(8)
   const hashed = hashCode(code, salt)
   PENDING_CODES.set(norm, { hashed, salt, expiresAt: now + CODE_TTL_MS, issuedAt: now, attempts: 0 })
+
   const delivery = await sendSignInCode(norm, code)
-  const previewCode = delivery.transport === 'log' ? code : undefined
-  logger.info({ email: norm, transport: delivery.transport }, 'sign-in code issued')
+  const isProd = process.env.NODE_ENV === 'production'
+  const resendConfigured = Boolean(process.env.RESEND_API_KEY)
+
+  if (delivery.transport === 'send-failed') {
+    // Resend was configured but refused (unverified domain, bounce, etc.).
+    // Refuse the request rather than leak the code on the client.
+    PENDING_CODES.delete(norm)
+    throw new Error('We could not send a sign-in code to that address. Please verify the address and try again, or contact support.')
+  }
+
+  // Only return the code inline as a dev-convenience when: NOT production AND
+  // no email provider is configured. Anything else → previewCode omitted.
+  const canPreview = !isProd && !resendConfigured
+  const previewCode = (canPreview && delivery.transport === 'log') ? code : undefined
+  logger.info({ email: norm, transport: delivery.transport, previewSent: Boolean(previewCode) }, 'sign-in code issued')
   return { sent: true, transport: delivery.transport, previewCode }
 }
 
@@ -199,18 +215,21 @@ async function sendSignInCode(email, code) {
       })
       if (!res.ok) {
         const body = await res.text()
-        logger.warn({ status: res.status, body: body.slice(0, 200) }, 'resend send failed — falling back to log transport')
-        logger.info({ email, code }, 'SIGN-IN CODE (fallback log)')
-        return { transport: 'log' }
+        // Log the code for the operator to recover it from server logs if
+        // needed (never returned to the client).
+        logger.warn({ status: res.status, body: body.slice(0, 200) }, 'resend refused send')
+        logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
+        return { transport: 'send-failed', status: res.status }
       }
       return { transport: 'resend' }
     } catch (err) {
-      logger.warn({ err: err.message }, 'resend threw — falling back to log transport')
-      logger.info({ email, code }, 'SIGN-IN CODE (fallback log)')
-      return { transport: 'log' }
+      logger.warn({ err: err.message }, 'resend threw')
+      logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
+      return { transport: 'send-failed', status: 0 }
     }
   }
-  // No email provider configured — log for local dev.
+  // No email provider configured — treat as local dev. requestSignInCode is
+  // the gate that decides whether to actually expose previewCode.
   logger.info({ email, code }, 'SIGN-IN CODE (no email provider — set RESEND_API_KEY to send real email)')
   return { transport: 'log' }
 }

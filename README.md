@@ -213,7 +213,7 @@ Two clean layers: the **engine** (`src/domain.js`, `src/backtest.js`) knows noth
 
 Three seams — each is honest about what's live vs simulated:
 
-1. **Public prices + candles + indicators + books.** Direct HTTPS to `api.bitget.com` for all 18 assets — crypto spot pairs and the R-prefixed tokenized-equity pairs. No auth required. Runs by default when you `npm run server`. The server builds a live universe (real price, 24h/7d change, ATR, RSI, volume z-score, spread) and injects it into every research, thesis, execution-help and scan call, alongside real wire news and a real macro snapshot (DXY/SPX/NDX/VIX/UST10Y via Yahoo).
+1. **Public prices + candles + indicators + books.** Direct HTTPS to `api.bitget.com` for all 18 assets — the R-prefixed tokenized-equity pairs (primary universe) plus crypto spot pairs (correlation set). No auth required. Runs by default when you `npm run server`. The server builds a live universe (real price, 24h/7d change, ATR, RSI, volume z-score, spread) and injects it into every research, thesis, execution-help and scan call, alongside real wire news and a real macro snapshot (DXY/SPX/NDX/VIX/UST10Y via Yahoo).
 2. **`bitget-signal` skills.** Skills compute from the live context above by default; seeded deterministic values remain only as the offline fallback (clearly stamped `DEMO`). Wire `BITGET_MCP_URL` to point at Bitget's Agent Hub MCP sidecar (`bgc mcp serve --port 9091`) and the badge flips to `BITGET MCP · LIVE`. Skill schemas match.
 3. **Live paper trading via Agentic Account.** OAuth callback scaffolded in `server/lib/auth.mjs`; final Bitget order call lives in `applyTraderDecision`. Enable when you provision `BITGET_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`. Trader Approve is always required.
 
@@ -416,7 +416,7 @@ npm run lint:demo-strings   # fails the build if demo strings ship in dist/
 
 Everything below runs live on a fresh checkout with `npm install && npm run server`:
 
-- **Bitget public prices** — real spot tickers for all 18 assets (crypto majors + tokenized equities via Bitget R-pairs), refreshed every 10s.
+- **Bitget public prices** — real spot tickers for all 18 assets (10 tokenized U.S. equities via Bitget R-pairs + 8 crypto correlation set), refreshed every 10s.
 - **Bitget indicators** — real EMA20/50, RSI14, ATR14, 48h swing support/resistance, volume z-score, 7d change computed from 200 hourly candles.
 - **Cross-venue positioning** — real funding rate + open interest from Binance, OKX, and Bitget perp APIs, aggregated per asset with skew + crowding classification.
 - **Bitget spot order book** — real bid/ask depth, spread in bps, depth imbalance — for equities too.

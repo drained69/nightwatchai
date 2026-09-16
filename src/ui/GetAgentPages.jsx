@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { apiBase, hasApi, apiUrl } from './apiBase.js'
 import { MarketPulse } from './MarketPulse.jsx'
+import { purgeAllSessions } from '../domain.js'
 
 async function api(pathOrToken, opts = {}) {
   if (!hasApi()) throw new Error('adapter not attached')
@@ -29,9 +30,37 @@ export function getStoredUser() { try { return JSON.parse(localStorage.getItem(U
 export function saveAuth(user, token) {
   try { localStorage.setItem(TOK_KEY, token); localStorage.setItem(USR_KEY, JSON.stringify(user)) } catch { /* private mode */ }
 }
-export function logout() { try { localStorage.removeItem(TOK_KEY); localStorage.removeItem(USR_KEY) } catch { /* ignore */ } }
+export function logout() {
+  try {
+    localStorage.removeItem(TOK_KEY)
+    localStorage.removeItem(USR_KEY)
+  } catch { /* ignore */ }
+  // Wipe every per-user + legacy session slot so User B never inherits User A's
+  // positions, reports, watchlist, decisions or PnL when they sign in next.
+  try { purgeAllSessions() } catch { /* ignore */ }
+}
 
 /** ---------------- Passwordless email sign-in ---------------- */
+
+/**
+ * Mask an email's local part but preserve the domain, e.g.
+ *   uba9230@gmail.com  →  ub****30@gmail.com
+ *   ab@x.com           →  a****@x.com
+ *   me@x.com           →  m****@x.com
+ * Keeps enough signal for the user to spot a typo in either half without
+ * ever rendering the full identifying local part on screen.
+ */
+export function maskEmail(email) {
+  const raw = String(email || '').trim()
+  const at = raw.indexOf('@')
+  const localPart = at >= 0 ? raw.slice(0, at) : raw
+  const domain    = at >= 0 ? raw.slice(at)   : ''
+  if (!localPart) return raw
+  const masked = localPart.length <= 4
+    ? `${localPart[0]}****`
+    : `${localPart.slice(0, 2)}****${localPart.slice(-2)}`
+  return `${masked}${domain}`
+}
 
 /**
  * Email-only sign-in, like getagent.studio. Two steps:
@@ -86,7 +115,7 @@ export function SignInWidget({ onSignedIn }) {
       <form className="panel signin-panel" onSubmit={verifyCode}>
         <div className="panel-head">
           <h3>Check your inbox</h3>
-          <small>We sent a 6-digit sign-in code to <b>{email}</b>.</small>
+          <small>We sent a 6-digit sign-in code to <b>{maskEmail(email)}</b>.</small>
         </div>
         <div className="signin-body">
           {notice && <div className="signin-notice">{notice}</div>}
@@ -430,7 +459,14 @@ export function LeaderboardPage({ user, onOpenPlaybook, onOpenAssayer }) {
                 <b className="mono muted">{i + 1}</b>
                 <div className="lb-title">
                   <b>{r.title}</b>
-                  <small className="muted">{r.ownerName || '—'} · {new Date(r.createdAt).toISOString().slice(0, 10)}</small>
+                  <small className="muted">
+                    {r.ownerName || '—'} · {new Date(r.createdAt).toISOString().slice(0, 10)}
+                    {r.backtestable === false && (
+                      <em className="pill outline mini" style={{ marginLeft: 6 }} title={`Requires live-only fields: ${(r.backtestMissing || []).join(', ')}`}>
+                        live-context only
+                      </em>
+                    )}
+                  </small>
                 </div>
                 <span className="lb-asset">
                   <b className="mono">{r.asset}</b>

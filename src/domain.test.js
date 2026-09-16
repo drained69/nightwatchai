@@ -361,3 +361,64 @@ test('initialSession starts with empty news feed — real product hydrates from 
   assert.deepEqual(s.news, [])
   assert.deepEqual(s.newsAlerts, [])
 })
+
+/* ---------- localStorage isolation (cross-account leak fix) ---------- */
+
+import { storageKeyFor, STORAGE_KEY_PREFIX, loadSession, saveSession, purgeAllSessions } from './domain.js'
+
+test('storageKeyFor scopes to userId and is safe against exotic characters', () => {
+  assert.equal(storageKeyFor('usr_abcd1234'), `${STORAGE_KEY_PREFIX}.usr_abcd1234`)
+  assert.equal(storageKeyFor(null),          `${STORAGE_KEY_PREFIX}.anon`)
+  assert.equal(storageKeyFor(''),            `${STORAGE_KEY_PREFIX}.anon`)
+  assert.equal(storageKeyFor('a b/c<>?'),    `${STORAGE_KEY_PREFIX}.abc`)
+  assert.notEqual(storageKeyFor('usr_a'), storageKeyFor('usr_b'))
+})
+
+/**
+ * The regression: User A's session state must never surface for User B on the
+ * same browser after A signs out and B signs in. This test simulates the flow
+ * using a tiny in-memory localStorage polyfill.
+ */
+test('session state is isolated per user and logout purges every slot', () => {
+  const store = new Map()
+  const shim = {
+    length: 0,
+    getItem: (k) => store.has(k) ? store.get(k) : null,
+    setItem: (k, v) => { store.set(k, String(v)); shim.length = store.size },
+    removeItem: (k) => { store.delete(k); shim.length = store.size },
+    key: (i) => Array.from(store.keys())[i] ?? null,
+  }
+  globalThis.localStorage = shim
+
+  try {
+    // User A signs in and does some work.
+    const sessionA = { ...initialSession(), watchlist: ['NVDA', 'BTC'], positions: [{ id: 'a-only', status: 'OPEN', notional: 500 }] }
+    saveSession(sessionA, 'usr_a')
+
+    // A's data lives ONLY in A's slot.
+    assert.ok(store.has(`${STORAGE_KEY_PREFIX}.usr_a`))
+    assert.equal(store.has(`${STORAGE_KEY_PREFIX}.usr_b`), false)
+
+    // Load for a *different* user must return a clean initial session —
+    // not User A's positions or watchlist.
+    const seedForB = loadSession('usr_b')
+    assert.notDeepEqual(seedForB.watchlist,  sessionA.watchlist,  'watchlist leaked from A to B')
+    assert.equal(seedForB.positions.some(p => p.id === 'a-only'), false, 'positions leaked from A to B')
+
+    // User B writes their own state — must not touch A's slot.
+    const sessionB = { ...initialSession(), watchlist: ['ETH'] }
+    saveSession(sessionB, 'usr_b')
+    const aReload = loadSession('usr_a')
+    assert.ok(aReload.positions.some(p => p.id === 'a-only'), 'A lost their positions')
+    assert.deepEqual(aReload.watchlist, ['NVDA', 'BTC'])
+
+    // Logout / purge wipes both users AND the anon slot AND any legacy shared key.
+    shim.setItem('nightwatch.session.v3', JSON.stringify({ legacy: true }))
+    purgeAllSessions()
+    assert.equal(store.has(`${STORAGE_KEY_PREFIX}.usr_a`), false, 'A slot survived purge')
+    assert.equal(store.has(`${STORAGE_KEY_PREFIX}.usr_b`), false, 'B slot survived purge')
+    assert.equal(store.has('nightwatch.session.v3'),      false, 'legacy shared slot survived purge')
+  } finally {
+    delete globalThis.localStorage
+  }
+})

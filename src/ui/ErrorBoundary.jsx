@@ -1,4 +1,5 @@
 import React from 'react'
+import { purgeAllSessions } from '../domain.js'
 
 export class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -23,7 +24,7 @@ export class ErrorBoundary extends React.Component {
           <pre>{String(this.state.error?.message || this.state.error)}</pre>
           <div className="panic-actions">
             <button className="btn primary" onClick={this.reset}>RESET VIEW</button>
-            <button className="btn ghost" onClick={() => { try { localStorage.removeItem('nightwatch.session.v3') } catch { /* ignore */ }; location.reload() }}>WIPE SESSION</button>
+            <button className="btn ghost" onClick={() => { try { purgeAllSessions() } catch { /* ignore */ }; location.reload() }}>WIPE SESSION</button>
           </div>
         </div>
       </div>

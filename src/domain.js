@@ -10,8 +10,25 @@
  *   news-briefing · market-intel · macro-analyst · sentiment-analyst · technical-analysis
  */
 
-export const STORAGE_KEY = 'nightwatch.session.v3'
-export const LEGACY_STORAGE_KEYS = ['nightwatch.session.v2', 'nightwatch.session.v1']
+/**
+ * SECURITY: session state must be user-scoped so that when User A signs out and
+ * User B signs in on the same browser, B never sees A's watchlist, reports,
+ * decisions, or paper positions. The public STORAGE_KEY is the anonymous slot;
+ * `storageKeyFor(userId)` returns the per-user slot.
+ */
+export const STORAGE_KEY_PREFIX = 'nightwatch.session.v3'
+export const STORAGE_KEY = `${STORAGE_KEY_PREFIX}.anon`
+export const LEGACY_STORAGE_KEYS = ['nightwatch.session.v3', 'nightwatch.session.v2', 'nightwatch.session.v1']
+
+/** Returns the localStorage key that scopes a session to a given user (or the
+ *  anonymous slot when no user is signed in). */
+export function storageKeyFor(userId) {
+  const id = (userId && String(userId).trim()) || 'anon'
+  // Only allow the id chars we actually issue (usr_ + hex) — belt & braces
+  // against odd values crossing the boundary.
+  const safe = id.replace(/[^A-Za-z0-9_-]/g, '')
+  return `${STORAGE_KEY_PREFIX}.${safe || 'anon'}`
+}
 export const RESEARCH_STEP_MS = 520
 
 export const BITGET_SIGNAL_SKILLS = [
@@ -158,25 +175,64 @@ export function migrateFromLegacy(parsed) {
   }
 }
 
-export function loadSession() {
+/**
+ * Load session state for `userId`. Falls back to a fresh initialSession() if
+ * nothing is stored — critically, we do NOT bleed the anon slot into a signed-in
+ * user, nor a signed-in user into anon.
+ *
+ * Legacy unscoped keys (v1/v2/v3-flat) are read only into the anon slot on
+ * first boot and then deleted — signed-in users always start clean if the
+ * server does not hand them state.
+ */
+export function loadSession(userId) {
   try {
-    const raw = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY)
+    if (typeof localStorage === 'undefined') return initialSession()
+    const key = storageKeyFor(userId)
+    const raw = localStorage.getItem(key)
     if (raw) return coerceSession(JSON.parse(raw))
-    for (const key of LEGACY_STORAGE_KEYS) {
-      const legacy = typeof localStorage !== 'undefined' && localStorage.getItem(key)
-      if (legacy) {
-        const next = migrateFromLegacy(JSON.parse(legacy))
-        saveSession(next)
-        try { localStorage.removeItem(key) } catch { /* ignore */ }
-        return next
+    // Only migrate legacy shared keys into the anon slot — never into a user
+    // slot. Anything a signed-in user cares about must round-trip through the
+    // server, not through shared browser state.
+    if (!userId) {
+      for (const legacyKey of LEGACY_STORAGE_KEYS) {
+        const legacy = localStorage.getItem(legacyKey)
+        if (legacy) {
+          let next
+          try { next = migrateFromLegacy(JSON.parse(legacy)) } catch { next = initialSession() }
+          saveSession(next, null)
+          try { localStorage.removeItem(legacyKey) } catch { /* ignore */ }
+          return next
+        }
       }
     }
   } catch { /* storage unavailable in private mode */ }
   return initialSession()
 }
 
-export function saveSession(session) {
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, JSON.stringify(session)) } catch { /* ignore */ }
+export function saveSession(session, userId) {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(storageKeyFor(userId), JSON.stringify(session))
+  } catch { /* ignore */ }
+}
+
+/**
+ * Sign-out helper: purge every per-user session slot from localStorage (all
+ * users, not just the current one, because we can't always know which one the
+ * browser last held), plus the legacy shared keys. Public prefs like the
+ * disclaimer ack are preserved.
+ */
+export function purgeAllSessions() {
+  try {
+    if (typeof localStorage === 'undefined') return
+    const doomed = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k) continue
+      if (k.startsWith(STORAGE_KEY_PREFIX + '.') || LEGACY_STORAGE_KEYS.includes(k)) doomed.push(k)
+    }
+    for (const k of doomed) { try { localStorage.removeItem(k) } catch { /* ignore */ } }
+  } catch { /* ignore */ }
 }
 
 /* -------------------------------------------------------------------- Formatters */

@@ -62,7 +62,12 @@ const NAV = [
 
 function App({ authUser: signedInUser, onSignedOut }) {
   const [page, setPage] = useState('research')
-  const [session, setSession] = useState(loadSession)
+  // IMPORTANT: session state is user-scoped in localStorage. The parent AuthGate
+  // remounts <App> with a fresh key whenever the user changes, so we compute
+  // the initial session against *this* user's id — never the shared slot.
+  const [authUser, setAuthUser] = useState(signedInUser || getStoredUser)
+  const initialUserId = (signedInUser || getStoredUser())?.id || null
+  const [session, setSession] = useState(() => loadSession(initialUserId))
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
@@ -70,7 +75,6 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const [clock, setClock] = useState(nowClock())
   const [liveTrace, setLiveTrace] = useState([])
   const [activeArtifact, setActiveArtifact] = useState(null)
-  const [authUser, setAuthUser] = useState(signedInUser || getStoredUser)
   const [openPlaybookId, setOpenPlaybookId] = useState(null)
   const authToken = getToken()
   const [bitgetStatus, setBitgetStatus] = useState({ connected: false, model: null, reason: 'checking…' })
@@ -83,7 +87,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const provider = useRef(new NightwatchProvider()).current
 
   useEffect(() => { sessionRef.current = session }, [session])
-  useEffect(() => { saveSession(session) }, [session])
+  useEffect(() => { saveSession(session, authUser?.id || null) }, [session, authUser?.id])
 
   // Personal session hydrate: on sign-in, pull this user's server-side
   // watchlist/preferences/reports/positions/etc. so their state follows them
@@ -983,24 +987,78 @@ function ThesisResult({ artifact }) {
 function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submit }) {
   const open = session.positions.filter(p => p.status === 'OPEN')
   const closed = session.positions.filter(p => p.status === 'CLOSED')
-  const nav = session.memory.preferences.nav
   const exposureBook = open.reduce((s, p) => s + p.notional, 0)
   const unrealized = open.reduce((s, p) => s + (p.pnl || 0), 0)
   const realized   = closed.reduce((s, p) => s + (p.pnl || 0), 0)
   const impact = activeArtifact?.type === 'portfolio' ? activeArtifact.payload : null
+
+  /* --- Server-authoritative paper account + Playbook allocations --- */
+  const [paper, setPaper] = useState(null)
+  const [mine, setMine]   = useState({ created: [], followed: [] })
+  const token = getToken()
+  useEffect(() => {
+    if (!hasApi() || !token) return
+    let alive = true
+    const pull = async () => {
+      try {
+        const [p, m] = await Promise.all([
+          fetch(apiUrl('/paper'),          { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null),
+          fetch(apiUrl('/playbooks/mine'), { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null),
+        ])
+        if (!alive) return
+        if (p?.paper) setPaper(p.paper)
+        if (m) setMine({ created: m.created || [], followed: m.followed || [] })
+      } catch { /* ignore */ }
+    }
+    pull(); const t = setInterval(pull, 20000); return () => { alive = false; clearInterval(t) }
+  }, [token])
+
+  const paperNav = paper?.totalCapital ?? paper?.startingCapital ?? 10000
+  const followedPnlUsd = mine.followed.reduce((s, f) => s + (f.allocation?.currentPnlUsd || 0), 0)
+
   return (
     <div className="page">
       <PageHead title="Portfolio" eyebrow={<><Wallet size={12} /> PAPER BOOK · TRADER-APPROVED FILLS ONLY</>}>
         <button className="btn primary sm" onClick={() => { const q = 'How does a $1500 long BTC affect my portfolio?'; setCommand(q); submit(q) }}>SIMULATE IMPACT</button>
       </PageHead>
 
+      {paper && (
+        <div className="stat-strip">
+          <div><small>PAPER CAPITAL</small><b>${paperNav.toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">starting ${(paper.startingCapital ?? 10000).toLocaleString()}</em></div>
+          <div><small>FREE</small><b>${(paper.freeCapital ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">ready to allocate</em></div>
+          <div><small>ALLOCATED</small><b>${(paper.allocatedCapital ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">across {mine.followed.length} playbook{mine.followed.length === 1 ? '' : 's'}</em></div>
+          <div><small>REALIZED P&L</small><b className={(paper.totalPnl ?? 0) >= 0 ? 'up' : 'down'}>{fmtAbs(paper.totalPnl ?? 0)}</b></div>
+          <div><small>OPEN PLAYBOOK P&L</small><b className={followedPnlUsd >= 0 ? 'up' : 'down'}>{fmtAbs(followedPnlUsd)}</b></div>
+        </div>
+      )}
+
       <div className="stat-strip">
-        <div><small>NAV</small><b>${nav.toLocaleString()}</b></div>
-        <div><small>OPEN NOTIONAL</small><b>${exposureBook.toLocaleString()}</b><em className="muted">{nav > 0 ? `${((exposureBook / nav) * 100).toFixed(1)}% of NAV` : '—'}</em></div>
-        <div><small>UNREALIZED P&L</small><b className={unrealized >= 0 ? 'up' : 'down'}>{fmtAbs(unrealized)}</b></div>
-        <div><small>REALIZED P&L</small><b className={realized >= 0 ? 'up' : 'down'}>{fmtAbs(realized)}</b></div>
-        <div><small>OPEN POSITIONS</small><b>{open.length}</b></div>
+        <div><small>OPEN NOTIONAL (LOCAL)</small><b>${exposureBook.toLocaleString()}</b><em className="muted">{paperNav > 0 ? `${((exposureBook / paperNav) * 100).toFixed(1)}% of paper` : '—'}</em></div>
+        <div><small>UNREALIZED P&L (LOCAL)</small><b className={unrealized >= 0 ? 'up' : 'down'}>{fmtAbs(unrealized)}</b></div>
+        <div><small>REALIZED P&L (LOCAL)</small><b className={realized >= 0 ? 'up' : 'down'}>{fmtAbs(realized)}</b></div>
+        <div><small>LOCAL OPEN</small><b>{open.length}</b></div>
+        <div><small>LOCAL CLOSED</small><b>{closed.length}</b></div>
       </div>
+
+      {mine.followed.length > 0 && (
+        <div className="panel">
+          <div className="panel-head"><h3>Followed playbooks</h3><small>{mine.followed.length} · live PnL from real Bitget prices</small></div>
+          <div className="pos-table">
+            <div className="pos-head"><span>Playbook</span><span>Asset</span><span>Dir</span><span>Allocated</span><span>Live PnL %</span><span>Live PnL $</span><span>Started</span></div>
+            {mine.followed.map(({ allocation: a, playbook: p }) => (
+              <div className="pos-row" key={a.id}>
+                <b>{p?.title || a.playbookId}</b>
+                <span className="mono muted">{p?.asset || '—'}</span>
+                <span className={p?.direction === 'LONG' ? 'pill green mini' : 'pill amber mini'}>{p?.direction || '—'}</span>
+                <b className="mono">${(a.allocatedUsd || 0).toLocaleString()}</b>
+                <b className={(a.currentPnlPct || 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(a.currentPnlPct || 0)}</b>
+                <b className={(a.currentPnlUsd || 0) >= 0 ? 'up mono' : 'down mono'}>{fmtAbs(a.currentPnlUsd || 0)}</b>
+                <span className="mono muted">{a.startedAt ? new Date(a.startedAt).toISOString().slice(0, 10) : '—'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {impact ? <ImpactCard impact={impact} /> : null}
 
@@ -1292,7 +1350,7 @@ function NewsCard({ item, onAsk }) {
       {a.regimeShift && (
         <div className="regime-note">
           <span className="pill outline mini">CROSS-ASSET</span>
-          Cross-asset regime shift · <b>{a.regimeShift.replace('_', '-').toLowerCase()}</b> — expect correlated moves across {a.regimeShift === 'RISK_ON' ? 'crypto majors and high-beta equities.' : 'risk assets; USD-strength wins.'}
+          Cross-asset regime shift · <b>{a.regimeShift.replace('_', '-').toLowerCase()}</b> — expect correlated moves across {a.regimeShift === 'RISK_ON' ? 'high-beta U.S. equities (NVDA, TSLA, AMD, MSTR, COIN) and crypto majors.' : 'risk assets; USD-strength wins.'}
         </div>
       )}
 
@@ -1498,7 +1556,7 @@ function SettingsPage({ session, setSession, bitgetStatus, onReset }) {
         <div className="panel-head"><h3>Session</h3><small>Local · trader-gated</small></div>
         <div className="settings-body">
           <div className="kv-row"><span>Paper only</span><b className="up">ENFORCED</b></div>
-          <div className="kv-row"><span>Storage</span><b>localStorage · nightwatch.session.v3</b></div>
+          <div className="kv-row"><span>Storage</span><b>localStorage · nightwatch.session.v3.&lt;user&gt;</b></div>
           <div className="kv-row"><span>Engine</span><b>{session.provider.engine}</b></div>
           <button className="btn ghost" onClick={onReset}>RESET SESSION</button>
         </div>

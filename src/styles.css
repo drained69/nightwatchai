@@ -1210,3 +1210,90 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   font: 500 9px 'IBM Plex Mono'; letter-spacing: 1.2px; text-transform: uppercase;
   color: var(--muted);
 }
+
+/* ============================================================= Printed research card */
+.printed-card {
+  position: relative;
+  padding: 22px 24px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 0 0 3px var(--panel-2), inset 0 0 0 4px var(--line-soft);
+}
+.printed-card::before,
+.printed-card::after {
+  content: '';
+  position: absolute;
+  top: 8px; bottom: 8px;
+  left: 8px; right: 8px;
+  border: 1px dashed var(--line-soft);
+  pointer-events: none;
+  z-index: 0;
+}
+.printed-card > * { position: relative; z-index: 1 }
+.printed-card-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.printed-card-eyebrow {
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.7px; text-transform: uppercase;
+  color: var(--muted);
+}
+.printed-card-title {
+  font: 400 22px 'DM Serif Display', Georgia, serif;
+  color: var(--text);
+}
+.printed-card-section { margin-top: 16px; padding-top: 12px; border-top: 1px dotted var(--line-soft) }
+.printed-card-section:first-of-type { border-top: 0; padding-top: 0 }
+.printed-card-label {
+  display: flex; align-items: center; gap: 6px;
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 8px;
+}
+.printed-card-section p {
+  margin: 4px 0; color: var(--text-2);
+  font: 400 13px/1.6 'DM Sans', system-ui, sans-serif;
+}
+
+.thesis-statement { font: 500 13.5px/1.55 'DM Sans', system-ui, sans-serif; color: var(--text) }
+.thesis-meta {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--line-soft);
+  font: 400 11px 'IBM Plex Mono';
+}
+.thesis-meta span { color: var(--muted); letter-spacing: 0.4px }
+.thesis-meta b     { color: var(--text); font-weight: 600 }
+.thesis-drivers { margin: 10px 0 0; padding-left: 18px; color: var(--text-2); font: 400 12px/1.55 'IBM Plex Mono' }
+.thesis-drivers li { padding: 3px 0 }
+
+.change-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px }
+.change-list li {
+  display: grid; grid-template-columns: minmax(140px, 1fr) 1.4fr; gap: 12px;
+  align-items: baseline;
+  padding: 8px 10px; border: 1px solid var(--line-soft); background: var(--panel);
+}
+.change-list li b { color: var(--text); font-weight: 600; font: 500 12px 'IBM Plex Mono' }
+.change-list li em { font-style: normal; color: var(--muted); font: 400 12px/1.5 'DM Sans', sans-serif }
+
+.stress-table { display: flex; flex-direction: column }
+.stress-head, .stress-row {
+  display: grid; grid-template-columns: 1.4fr 1.4fr 0.7fr 0.7fr;
+  gap: 10px; align-items: center; padding: 8px 10px;
+  font: 400 12px 'IBM Plex Mono';
+}
+.stress-head {
+  background: var(--panel);
+  border-bottom: 1.5px solid var(--line);
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.3px; text-transform: uppercase; color: var(--muted);
+}
+.stress-row { border-bottom: 1px dotted var(--line-soft); color: var(--text-2) }
+.stress-row b { color: var(--text); font-weight: 600 }
+
+.dot.cyan  { background: #4fc3d4 }
+.dot.amber { background: #d69a4c }
+
+@media (max-width: 720px) {
+  .change-list li { grid-template-columns: 1fr }
+  .stress-head, .stress-row { grid-template-columns: 1.4fr 1fr 0.7fr 0.7fr; font-size: 11px }
+}

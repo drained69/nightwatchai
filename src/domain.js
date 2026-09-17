@@ -707,6 +707,11 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
 
   const analogs = (memory?.analogs || []).filter(a => a.asset === symbol).slice(0, 3)
   const risks = buildRisks(symbol, market, signal, skills)
+  const situation = buildSituation(symbol, market, signal, skills)
+  const shortTermThesis = buildShortTermThesis(symbol, market, signal, skills)
+  const longTermThesis  = buildLongTermThesis(symbol, market, signal, skills)
+  const whatChangesThisThesis = buildChangeConditions(symbol, market, signal, skills)
+  const stressTests = buildStressTests(symbol, market, signal, skills)
 
   const invalidation = invalidationOverride || {
     price: signal.direction === 'LONG'
@@ -747,6 +752,11 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
     skills,
     summary,
     signal,
+    situation,
+    shortTermThesis,
+    longTermThesis,
+    whatChangesThisThesis,
+    stressTests,
     supporting,
     contradicting,
     risks,
@@ -758,6 +768,158 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
       : `Deterministic demo data · Bitget MCP not connected · seed ${symbol}`,
     citations,
   }
+}
+
+/**
+ * Situation — a 2-3 line "here is what is happening right now" grounded in
+ * real numbers from the 5-skill pack. Every research report emits one so the
+ * printed card leads with a picture of the tape, not a verdict.
+ */
+function buildSituation(symbol, market, signal, skills) {
+  const news = skills.find(s => s.skill === 'news-briefing')
+  const mi   = skills.find(s => s.skill === 'market-intel')
+  const ta   = skills.find(s => s.skill === 'technical-analysis')
+  const sen  = skills.find(s => s.skill === 'sentiment-analyst')
+  const mac  = skills.find(s => s.skill === 'macro-analyst')
+  const price = market?.price != null ? `$${fmtPrice(market.price)}` : '—'
+  const change24h = market?.change24h != null ? fmtPct(market.change24h / 100) : '—'
+  const trend = ta?.data?.trend?.toLowerCase() || 'flat'
+  const tape = news?.data?.newsDirection ? `wire tape is ${news.data.newsDirection.toLowerCase()}` : `no fresh headlines`
+  const regime = mac?.data?.cryptoRegime === 'RISK_ON' ? 'risk-on macro' : mac?.data?.cryptoRegime === 'RISK_OFF' ? 'risk-off macro' : 'neutral macro'
+  const spread = mi?.data?.spreadBps != null ? `${Number(mi.data.spreadBps).toFixed(1)} bps spread` : `book depth unknown`
+  return [
+    `${symbol} is trading ${price} (${change24h} 24h). Trend is ${trend}; RSI ${ta?.data?.rsi ?? '—'}; ${spread}.`,
+    `${tape}, sentiment ${sen?.data?.tone?.toLowerCase() || 'neutral'} with ${sen?.data?.crowding?.toLowerCase() || 'unknown'} crowding, and ${regime}.`,
+  ]
+}
+
+/**
+ * Short-term thesis — the next hours-to-days. Anchored to the signal's
+ * direction, the strongest live-data driver, and an explicit expected move.
+ */
+function buildShortTermThesis(symbol, market, signal, skills) {
+  const ta  = skills.find(s => s.skill === 'technical-analysis')
+  const mi  = skills.find(s => s.skill === 'market-intel')
+  const news = skills.find(s => s.skill === 'news-briefing')
+  const atr = market?.atrPct ?? ta?.data?.atrPct ?? 1
+  const expectedMovePct = Math.max(0.6, Math.min(atr * 1.5, 8))
+  if (signal.status === 'NO_TRADE' || signal.direction === 'FLAT') {
+    return {
+      direction: 'FLAT',
+      horizon: 'next 24-72 hours',
+      statement: `${symbol} does not offer an actionable directional edge inside the next 24-72 hours. Composite ${signal.composite}, net edge ${fmtPct(signal.netEdge)} after friction.`,
+      keyDrivers: ['No skill produces a decisive read', 'Range trade until composite exceeds ±0.55'],
+      expectedMove: `Range-bound ±${(expectedMovePct * 0.6).toFixed(1)}%`,
+    }
+  }
+  const drivers = []
+  if (signal.catalyst) drivers.push(`Primary catalyst — ${signal.catalyst}`)
+  if (ta?.data?.trend) drivers.push(`Trend ${ta.data.trend}, EMA20 ${ta.data.ema20}, RSI ${ta.data.rsi}`)
+  if (mi?.data?.volumeZ != null) drivers.push(`Flow z-score ${mi.data.volumeZ}${mi.data.volumeZ > 1 ? ' (anomaly)' : ''}`)
+  if (news?.data?.live && news.data.newsCounts) drivers.push(`Live headline mix ${news.data.newsCounts.up || 0}↑ / ${news.data.newsCounts.down || 0}↓`)
+  return {
+    direction: signal.direction,
+    horizon: 'next 24-72 hours',
+    statement: `${symbol} carries a ${signal.direction.toLowerCase()} bias over the next 24-72 hours with ${(signal.confidence * 100).toFixed(0)}% confidence, driven by ${signal.catalyst}. Expect a move of roughly ±${expectedMovePct.toFixed(1)}% before the tape resolves.`,
+    keyDrivers: drivers.slice(0, 4),
+    expectedMove: `${signal.direction === 'LONG' ? '+' : '−'}${expectedMovePct.toFixed(1)}%`,
+  }
+}
+
+/**
+ * Long-term thesis — weeks-to-months. Uses the structural elements (macro,
+ * class-specific tailwinds/headwinds, and technical trend context).
+ */
+function buildLongTermThesis(symbol, market, signal, skills) {
+  const mac  = skills.find(s => s.skill === 'macro-analyst')
+  const ta   = skills.find(s => s.skill === 'technical-analysis')
+  const news = skills.find(s => s.skill === 'news-briefing')
+  const isEquity = market?.class === 'tokenized-equity'
+  const structural = []
+  if (isEquity) {
+    structural.push('Bitget xStocks tokenised equity — inherits underlying earnings + guidance cycle')
+    if (market?.event && market.event !== 'None') structural.push(`Named event on file: ${market.event}`)
+  } else {
+    structural.push('Crypto asset — correlation regime with BTC drives multi-week trend')
+  }
+  if (mac?.data?.ratesRegime) structural.push(`Rates regime: ${mac.data.ratesRegime.replace(/_/g, ' ').toLowerCase()}`)
+  if (ta?.data?.ema20 != null && ta?.data?.ema50 != null) structural.push(`EMA20 ${ta.data.ema20} vs EMA50 ${ta.data.ema50} — ${ta.data.ema20 > ta.data.ema50 ? 'uptrend' : 'downtrend'} structure`)
+  const longDir = ta?.data?.ema20 != null && ta?.data?.ema50 != null
+    ? (ta.data.ema20 > ta.data.ema50 ? 'LONG' : 'SHORT')
+    : signal.direction
+  const conviction = signal.direction === longDir ? 'aligned with short-term' : 'diverges from short-term'
+  return {
+    direction: longDir,
+    horizon: 'next 4-12 weeks',
+    statement: `Structural view over 4-12 weeks is ${longDir.toLowerCase()} ${symbol}, ${conviction} view. ${isEquity ? 'Position-size around the next earnings window.' : 'Position-size around the prevailing BTC regime and rates repricing.'}`,
+    structuralFactors: structural.slice(0, 4),
+    convictionVsShort: conviction,
+  }
+}
+
+/**
+ * What would change this thesis — a concrete, testable list of events. Every
+ * item is either a price level, a data-print threshold, or a regime shift.
+ */
+function buildChangeConditions(symbol, market, signal, skills) {
+  const ta  = skills.find(s => s.skill === 'technical-analysis')
+  const mi  = skills.find(s => s.skill === 'market-intel')
+  const mac = skills.find(s => s.skill === 'macro-analyst')
+  const isEquity = market?.class === 'tokenized-equity'
+  const atr = market?.atrPct ?? 1
+  const invalidPrice = signal.direction === 'LONG'
+    ? market?.price * (1 - Math.max(0.015, atr / 100))
+    : signal.direction === 'SHORT'
+    ? market?.price * (1 + Math.max(0.015, atr / 100))
+    : null
+  const conditions = []
+  if (invalidPrice != null) {
+    conditions.push({
+      label: `${signal.direction === 'LONG' ? 'Close < ' : signal.direction === 'SHORT' ? 'Close > ' : 'Close crosses '}$${fmtPrice(invalidPrice)}`,
+      why: 'Price invalidation — the setup fails at this level and the thesis flips',
+    })
+  }
+  if (ta?.data?.ema20 != null) {
+    conditions.push({
+      label: signal.direction === 'LONG' ? `${symbol} closes below EMA20 ($${ta.data.ema20})` : `${symbol} closes above EMA20 ($${ta.data.ema20})`,
+      why: 'Trend structure break — momentum stops working',
+    })
+  }
+  if (mi?.data?.spreadBps != null) {
+    conditions.push({
+      label: `Spread widens above ${Math.round(mi.data.spreadBps * 2)} bps`,
+      why: 'Liquidity dries up — friction consumes the expected edge',
+    })
+  }
+  if (isEquity) {
+    conditions.push({ label: 'Earnings pre-print or a guidance change from the underlying', why: 'Fundamental picture resets before the tape can express the thesis' })
+    conditions.push({ label: 'A regulatory or antitrust headline hits the underlying', why: 'Structural repricing overrides technical setup' })
+  } else {
+    conditions.push({ label: 'BTC moves > ±3% in 24h', why: 'Alt / crypto correlation regime shifts — thesis is exposed to the tail' })
+  }
+  conditions.push({
+    label: mac?.data?.ratesRegime === 'CUTS_AHEAD' ? 'Fed pivots hawkish or DXY breaks new high' : 'Fed pivots dovish or DXY breaks new low',
+    why: 'Macro regime flips — the risk-on/off backdrop for the setup inverts',
+  })
+  return conditions.slice(0, 6)
+}
+
+/**
+ * Stress tests — apply concrete shocks and report the estimated move. Every
+ * report ships with the same 4 buckets so the printed card is a true stress
+ * table, not just a bullet list.
+ */
+function buildStressTests(symbol, market, signal, skills) {
+  const ta = skills.find(s => s.skill === 'technical-analysis')
+  const mi = skills.find(s => s.skill === 'market-intel')
+  const atr = market?.atrPct ?? ta?.data?.atrPct ?? 1
+  const dir = signal.direction === 'SHORT' ? -1 : 1
+  return [
+    { name: 'Adverse 2× ATR shock',            shock: `${(atr * 2).toFixed(1)}% against the trade`,           expectedMovePct: -Number((atr * 2 / 100).toFixed(4)), survives: (atr * 2 / 100) < 0.06 },
+    { name: 'Cross-asset reversal',             shock: 'BTC 24h ≤ −4% risk-off',                                expectedMovePct: -0.03,                              survives: market?.class === 'tokenized-equity' },
+    { name: 'Liquidity dry-up',                 shock: `spread ${mi?.data?.spreadBps ?? '—'} → ${((mi?.data?.spreadBps || 8) * 3).toFixed(0)} bps`, expectedMovePct: -Number(((((mi?.data?.spreadBps || 8) * 3) / 10000)).toFixed(4)), survives: (mi?.data?.spreadBps ?? 10) < 6 },
+    { name: 'Headline reversal',                shock: 'a HIGH-severity headline flips wire bias',              expectedMovePct: -0.04,                              survives: false },
+  ].map(t => ({ ...t, expectedMovePct: Number((t.expectedMovePct * dir).toFixed(4)) }))
 }
 
 function buildRisks(symbol, market, signal, skills) {

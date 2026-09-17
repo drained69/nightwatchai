@@ -88,11 +88,50 @@ export function releaseCapital(userId, allocatedAmount, realizedPnl) {
   return next
 }
 
-/** Reset back to starting. */
+/**
+ * Credit (or debit) a realized PnL amount from a self-directed paper trade —
+ * i.e. a position the user opened by approving a research report and then
+ * closed at mark. Both freeCapital AND totalPnl move by the same amount so
+ * the running capital reflects real trades in real time.
+ *
+ * Idempotent via `sourceId` (the paper position id): a second call with the
+ * same source is a no-op, so accidental client double-taps or reloads while a
+ * request is in flight cannot double-credit the account.
+ */
+export function creditPnl(userId, amountUsd, sourceId) {
+  const user = getUser(userId)
+  const pa = paperAccount(userId)
+  if (!pa) throw new Error('user not found')
+  const applied = new Set(user.paperCredits || [])
+  const key = String(sourceId || '')
+  if (!key) throw new Error('sourceId required')
+  if (applied.has(key)) {
+    return { credited: false, reason: 'already-applied', paper: paperSnapshot(userId) }
+  }
+  const delta = Number(amountUsd)
+  if (!Number.isFinite(delta)) throw new Error('amountUsd must be a finite number')
+  const next = {
+    ...pa,
+    freeCapital: Number((pa.freeCapital + delta).toFixed(2)),
+    totalPnl:    Number((pa.totalPnl    + delta).toFixed(2)),
+  }
+  applied.add(key)
+  // Cap the applied set at 1000 recent entries to bound file size while
+  // preserving idempotency for the last ~1000 trades. FIFO eviction — order
+  // preserved because `applied` was constructed from an array.
+  const trimmed = Array.from(applied)
+  const kept = trimmed.length > 1000 ? trimmed.slice(-1000) : trimmed
+  upsertUser({ ...user, paperAccount: next, paperCredits: kept })
+  logger.info({ userId, sourceId: key, amountUsd: delta, newFree: next.freeCapital, newPnl: next.totalPnl }, 'paper pnl credited')
+  return { credited: true, delta, paper: paperSnapshot(userId) }
+}
+
+/** Reset back to starting. Also wipes the idempotency ledger so historical
+ *  paper-trade credits from the previous cycle can't block a re-play. */
 export function resetPaperAccount(userId) {
   const user = getUser(userId)
   const pa = { startingCapital: STARTING, freeCapital: STARTING, allocatedCapital: 0, totalPnl: 0, createdAt: new Date().toISOString(), resetAt: new Date().toISOString() }
-  upsertUser({ ...user, paperAccount: pa })
+  upsertUser({ ...user, paperAccount: pa, paperCredits: [] })
   return pa
 }
 

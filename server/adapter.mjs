@@ -52,7 +52,7 @@ import { shareReport, readSharedByToken } from './sharing.mjs'
 import { analyzePortfolio, correlationToBtc } from './copilot.mjs'
 import * as Playbooks from './playbooks.mjs'
 import * as Allocations from './allocations.mjs'
-import { paperSnapshot, resetPaperAccount } from './paper.mjs'
+import { paperSnapshot, resetPaperAccount, creditPnl } from './paper.mjs'
 import { chat as assayerChat } from './assayer.mjs'
 import { buildLiveContext, liveUniverseStatus, getMacro } from './market-context.mjs'
 
@@ -742,6 +742,14 @@ const server = http.createServer(async (req, res) => {
       const user = requireAuth(req, res); if (!user) return
       const pa = resetPaperAccount(user.id)
       return json(res, 200, { ok: true, paper: pa })
+    }
+    if (route === 'POST /paper/credit') {
+      const user = requireAuth(req, res); if (!user) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const result = creditPnl(user.id, Number(body?.amountUsd), body?.sourceId)
+        return json(res, 200, result)
+      } catch (err) { return json(res, 400, { error: err.message }) }
     }
 
     // Playbooks

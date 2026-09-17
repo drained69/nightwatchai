@@ -1,11 +1,11 @@
 /**
- * GetAgent-style pages: Explore, The Assayer chat, and a Paper Account strip.
+ * The Assayer chat, Playbook detail modal, and a Paper Account strip.
  * Each hits the adapter directly via VITE_AGENT_API_URL (falls back to same-origin).
  * If no adapter is attached, we show a friendly "connect the adapter" note.
  */
 import React, { useEffect, useState } from 'react'
 import {
-  Compass, ExternalLink, Gem, MessageCircle, RotateCcw, Send, ShieldCheck, Sparkles, Wallet,
+  ExternalLink, Gem, MessageCircle, RotateCcw, Send, ShieldCheck, Sparkles, Wallet,
 } from 'lucide-react'
 import { apiBase, hasApi, apiUrl } from './apiBase.js'
 import { MarketPulse } from './MarketPulse.jsx'
@@ -170,7 +170,7 @@ export function SignInWidget({ onSignedIn }) {
   )
 }
 
-/** ---------------- Paper account strip (top of Explore) ---------------- */
+/** ---------------- Paper account strip (top of Assayer + Portfolio) ---------------- */
 
 export function PaperStrip({ user, onReset }) {
   const [paper, setPaper] = useState(null)
@@ -198,67 +198,6 @@ export function PaperStrip({ user, onReset }) {
       <div><small>ALLOCATED</small><b>{fmt(paper.allocatedCapital)}</b><em className="muted">across followed playbooks</em></div>
       <div><small>REALIZED P&L</small><b className={paper.totalPnl >= 0 ? 'up' : 'down'}>{paper.totalPnl >= 0 ? '+' : ''}{fmt(paper.totalPnl)}</b><em className="muted">closed only</em></div>
       <div style={{ display: 'flex', alignItems: 'end' }}><button className="btn ghost sm" onClick={reset} disabled={resetting}><RotateCcw size={12} /> RESET</button></div>
-    </div>
-  )
-}
-
-/** ---------------- Explore page (list of published Playbooks) ---------------- */
-
-export function ExplorePage({ user, onOpenPlaybook }) {
-  const [rows, setRows] = useState(null)
-  const [tickers, setTickers] = useState({})
-  const [error, setError] = useState(null)
-  useEffect(() => { api('/playbooks?limit=100').then(r => setRows(r.playbooks)).catch(e => setError(e.message)) }, [])
-  useEffect(() => {
-    let alive = true
-    const pull = async () => { try { const r = await api('/prices/live'); if (alive) setTickers(r.tickers || {}) } catch { /* ignore */ } }
-    pull(); const t = setInterval(pull, 15000)
-    return () => { alive = false; clearInterval(t) }
-  }, [])
-  if (!hasApi()) return <div className="empty-report"><div className="empty-icon"><Compass size={22} /></div><b>No adapter attached</b><p>Set <code>VITE_AGENT_API_URL</code> to your NIGHTWATCH server to browse Playbooks.</p></div>
-  if (error)   return <div className="empty-report"><b>Could not load playbooks</b><p>{error}</p></div>
-  if (!rows)   return <div className="empty-body">loading playbooks…</div>
-  return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <div className="eyebrow"><Compass size={12} /> EXPLORE · EVERY TRADE DESERVES A PLAYBOOK</div>
-          <h1>The Playbook Library</h1>
-        </div>
-        <div className="hint-inline">Real prices drive every paper P&L below. No real user funds are involved.</div>
-      </div>
-      <MarketPulse />
-      {user ? <PaperStrip user={user} /> : null}
-      <div className="playbook-grid">
-        {rows.map(p => {
-          const t = tickers[p.asset]
-          const priceLine = t ? `$${t.last >= 1000 ? Math.round(t.last).toLocaleString() : t.last?.toFixed(2)}` : null
-          return (
-            <button key={p.id} className="playbook-card" onClick={() => onOpenPlaybook(p.id)}>
-              <div className="pc-head">
-                <div className={`asset-mark ${p.asset === 'BTC' || p.asset === 'ETH' || p.asset === 'SOL' ? 'crypto' : 'equity'}`}>{p.asset?.[0] || '?'}</div>
-                <div><b>{p.title}</b><small>{p.ownerName || 'anonymous'} · {p.canonical ? 'CANONICAL' : 'COMMUNITY'}</small></div>
-                <span className={`pill mini ${p.direction === 'LONG' ? 'green' : 'amber'}`}>{p.direction}</span>
-              </div>
-              <p className="pc-desc">{p.description}</p>
-              {t && (
-                <div className="pc-live">
-                  <span>{p.asset} <b>{priceLine}</b></span>
-                  <em className={t.changePct24h >= 0 ? 'up' : 'down'}>{t.changePct24h >= 0 ? '+' : ''}{t.changePct24h?.toFixed(2)}%</em>
-                    {p.runtime?.position ? <span className="pill green mini">OPEN {((p.runtime.position.pnlPct ?? 0) * 100).toFixed(2)}%</span> : <span className="pill outline mini">FLAT</span>}
-                </div>
-              )}
-              <div className="pc-foot">
-                <span><b>{p.followers ?? 0}</b> followers</span>
-                <span><b>${(p.totalAllocatedUsd || 0).toLocaleString()}</b> allocated</span>
-                {p.backtest?.winRate != null && <span><b>{(p.backtest.winRate * 100).toFixed(0)}%</b> win · {p.backtest.tradeCount} trades</span>}
-                {p.backtest?.backtestable === false && <span className="muted">live-eval only</span>}
-                <span>{(p.tags || []).slice(0, 3).map(t => <em key={t}>#{t}</em>)}</span>
-              </div>
-            </button>
-          )
-        })}
-      </div>
     </div>
   )
 }
@@ -399,7 +338,7 @@ export function AssayerPage({ user, onAllocated }) {
       const r = await api('/playbooks', { method: 'POST', token, body: JSON.stringify(proposed) })
       await api(`/playbooks/${r.playbook.id}/publish`, { method: 'POST', token, body: JSON.stringify({ publish: true }) })
       setSavedId(r.playbook.id)
-      setMessages(m => [...m, { role: 'assistant', content: `Saved and published. Playbook id ${r.playbook.id}. Open it in Explore to allocate paper capital.` }])
+      setMessages(m => [...m, { role: 'assistant', content: `Saved and published. Playbook id ${r.playbook.id}. The Portfolio tab shows the followed list and live PnL.` }])
       setProposed(null)
       onAllocated?.()
     } catch (err) {

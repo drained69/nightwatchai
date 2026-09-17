@@ -140,7 +140,6 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 | **Portfolio** | Paper book (trader-approved fills only) + Δ exposure / Δ beta / sector mix simulator. |
 | **Backtest** | Replays skill pack + signal engine over synthetic or live candles; reports precision/recall/lift. |
 | **History** | Every research report, decision, review, and session log. |
-| **Explore** | Published Playbooks with real-price paper PnL. |
 | **Assayer** | AI chat companion that drafts Playbooks from plain-English prompts. |
 | **Settings** | Trader profile, watchlist, Bitget MCP connection status with setup steps. |
 
@@ -451,7 +450,7 @@ src/
   backtest.js          precision/recall/lift over synthetic or real candles (per-bar no-lookahead indicators)
   backtest.test.js     backtest tests
   main.jsx             SPA (Research · Analysis · News · Markets · Signals · Thesis Lab ·
-                       Portfolio · Backtest · History · Explore · Assayer · Settings)
+                       Portfolio · Backtest · History · Assayer · Settings)
   styles.css           institutional dark terminal design
   ui/
     ErrorBoundary.jsx  panic screen + wipe-session fallback
@@ -459,7 +458,7 @@ src/
     useLiveStream.js   SSE subscription hook
     usePush.js         Web Push subscribe + test
     MarketPulse.jsx    live BTC/ETH/F&G strip
-    GetAgentPages.jsx  Explore · Assayer · Playbook detail · paper account
+    GetAgentPages.jsx  Assayer · Playbook detail · paper account
 
 server/
   adapter.mjs          composed HTTP + SSE server

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
-  CalendarClock, ChevronRight, Compass, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
+  CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
@@ -29,7 +29,7 @@ function applyLiveTickers(rows, tickers) {
   })
 }
 import { runBacktestSynthetic } from './backtest.js'
-import { AssayerPage, ExplorePage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
+import { AssayerPage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
 import { ResearchCardActions } from './ui/ResearchCard.jsx'
@@ -46,7 +46,6 @@ const NAV = [
   { id: 'research',    label: 'Research',    icon: BrainCircuit },
   { id: 'analysis',    label: 'Analysis',    icon: Crosshair },
   { id: 'assayer',     label: 'The Assayer', icon: MessageCircle },
-  { id: 'explore',     label: 'Explore',     icon: Compass },
   { id: 'news',        label: 'News',        icon: Newspaper },
   { id: 'markets',     label: 'Markets',     icon: ScanLine },
   { id: 'signals',     label: 'Signals',     icon: Radio },
@@ -192,6 +191,29 @@ function App({ authUser: signedInUser, onSignedOut }) {
     provider.bitgetStatus().then(s => { if (alive) setBitgetStatus(s) })
     return () => { alive = false }
   }, [])
+
+  // When a self-directed paper position transitions to CLOSED — whether via
+  // CLOSE AT MARK or an auto stop/target hit inside the ticker loop — credit
+  // the realized $ PnL to the user's server paper account. The server is
+  // idempotent by position id, so this effect can safely re-fire and cannot
+  // double-credit even if the browser re-renders.
+  const creditedRef = useRef(new Set())
+  useEffect(() => {
+    if (!hasApi() || !authToken) return
+    for (const p of session.positions || []) {
+      if (p.status !== 'CLOSED') continue
+      if (creditedRef.current.has(p.id)) continue
+      const amountUsd = Number(p.pnl)
+      if (!Number.isFinite(amountUsd)) continue
+      creditedRef.current.add(p.id)
+      fetch(apiUrl('/paper/credit'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ amountUsd, sourceId: p.id }),
+        signal: AbortSignal.timeout(6000),
+      }).catch(() => { creditedRef.current.delete(p.id) /* retry on next render — server is idempotent */ })
+    }
+  }, [session.positions, authToken])
 
   // Real prices + news on first paint: hydrate from REST before the SSE streams
   // arrive so the UI never shows a hardcoded demo price or seeded headline when
@@ -423,6 +445,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
     const pnlPct = Number.isFinite(open.pnlPercent) ? open.pnlPercent : 0
     const closed = paper.simulateClose(open, pnlPct)
     closed.closeReason = 'CLOSED_AT_MARK'
+    // The credit useEffect above will post this realized $ PnL to the server
+    // paper account (idempotent by position id), so Free Capital + Realized
+    // P&L update whether the user closed manually or a stop/target hit fired.
     setSession(cur => addLog({ ...cur, positions: cur.positions.map(p => p.id === open.id ? closed : p) }, 'POSITION', `${open.asset} closed`, `CLOSED @ MARK · ${fmtPct(closed.pnlPercent)}`))
     notify(`Closed at mark · ${open.asset} · ${fmtPct(closed.pnlPercent)}`)
   }
@@ -547,11 +572,6 @@ function App({ authUser: signedInUser, onSignedOut }) {
         {page === 'backtest'  && <BacktestPage session={session} />}
         {page === 'history'   && <HistoryPage session={session} activeArtifact={activeArtifact} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
         {page === 'settings'  && <SettingsPage session={session} setSession={setSession} bitgetStatus={bitgetStatus} onReset={resetSession} />}
-        {page === 'explore'   && (
-          authUser
-            ? <ExplorePage user={authUser} onOpenPlaybook={setOpenPlaybookId} />
-            : <div className="page"><SignInWidget onSignedIn={(u) => setAuthUser(u)} /><ExplorePage user={null} onOpenPlaybook={setOpenPlaybookId} /></div>
-        )}
         {page === 'assayer'   && (
           authUser
             ? <AssayerPage user={authUser} onAllocated={() => setPage('portfolio')} />
@@ -1697,28 +1717,105 @@ function ActionSummaryCard({ report, openPosition, isTradable, decide, closeAtMa
  * Both fields are provided by the Qwen narration; a deterministic fallback is
  * used when the LLM is off.
  */
+/**
+ * "Printed research card" — every research question emits this. It leads with
+ * the current situation, then a short-term thesis, then a long-term thesis,
+ * then explicit change conditions and a stress table. Falls back gracefully
+ * when a report lacks the new fields (legacy reports from before the schema
+ * upgrade still render).
+ */
 function ThesisAndCardBlock({ report }) {
   const [showCard, setShowCard] = useState(false)
-  const th = report.thesis || {}
-  const shortThesis = th.short || (report.signal?.catalyst ? `Near term: ${report.signal.catalyst}` : 'Near term: no immediate catalyst on file.')
-  const longThesis  = th.long  || 'Multi-week: watch macro regime and the invalidation levels below.'
+  const situation = report.situation
+  const shortT   = report.shortTermThesis || null
+  const longT    = report.longTermThesis  || null
+  const changes  = report.whatChangesThisThesis || []
+  const stress   = report.stressTests || []
+  // Legacy fallback so older reports still render.
+  const legacyShort = report.thesis?.short || (report.signal?.catalyst ? `Near term: ${report.signal.catalyst}` : null)
+  const legacyLong  = report.thesis?.long  || null
+
   return (
-    <section className="thesis-block">
+    <section className="thesis-block printed-card">
+      <div className="printed-card-head">
+        <span className="printed-card-eyebrow">RESEARCH CARD · {report.symbol} · {report.dataMode || 'LIVE'}</span>
+        <span className="printed-card-title">{report.symbol} — {report.signal?.direction || 'FLAT'}</span>
+      </div>
+
+      {situation && situation.length > 0 && (
+        <div className="printed-card-section">
+          <small className="printed-card-label"><i className="dot cyan" /> SITUATION</small>
+          {situation.map((line, i) => <p key={i}>{line}</p>)}
+        </div>
+      )}
+
       <div className="thesis-row">
         <div className="thesis-cell thesis-short">
-          <small><i className="dot red" /> SHORT-TERM · HOURS TO DAYS</small>
-          <p>{shortThesis}</p>
+          <small><i className="dot red" /> SHORT-TERM THESIS · {shortT?.horizon || 'hours to days'}</small>
+          {shortT ? (
+            <>
+              <p className="thesis-statement">{shortT.statement}</p>
+              {shortT.expectedMove && <div className="thesis-meta"><span>Expected move</span><b>{shortT.expectedMove}</b></div>}
+              {shortT.keyDrivers?.length > 0 && (
+                <ul className="thesis-drivers">
+                  {shortT.keyDrivers.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p>{legacyShort || 'Near term: no immediate catalyst on file.'}</p>
+          )}
         </div>
         <div className="thesis-cell thesis-long">
-          <small><i className="dot green" /> LONG-TERM · WEEKS TO MONTHS</small>
-          <p>{longThesis}</p>
+          <small><i className="dot green" /> LONG-TERM THESIS · {longT?.horizon || 'weeks to months'}</small>
+          {longT ? (
+            <>
+              <p className="thesis-statement">{longT.statement}</p>
+              {longT.structuralFactors?.length > 0 && (
+                <ul className="thesis-drivers">
+                  {longT.structuralFactors.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p>{legacyLong || 'Multi-week: watch macro regime and the invalidation levels below.'}</p>
+          )}
         </div>
       </div>
+
+      {changes.length > 0 && (
+        <div className="printed-card-section">
+          <small className="printed-card-label"><i className="dot amber" /> WHAT WOULD CHANGE THIS THESIS</small>
+          <ul className="change-list">
+            {changes.map((c, i) => (
+              <li key={i}><b>{c.label}</b><em>{c.why}</em></li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {stress.length > 0 && (
+        <div className="printed-card-section">
+          <small className="printed-card-label"><i className="dot red" /> STRESS TEST · EVIDENCE AGAINST THESIS</small>
+          <div className="stress-table">
+            <div className="stress-head"><span>Scenario</span><span>Shock</span><span>Est. move</span><span>Survivable</span></div>
+            {stress.map((s, i) => (
+              <div className="stress-row" key={i}>
+                <b>{s.name}</b>
+                <span>{s.shock}</span>
+                <span className={s.expectedMovePct >= 0 ? 'up mono' : 'down mono'}>{fmtPct(s.expectedMovePct)}</span>
+                <span className={s.survives ? 'up' : 'down'}>{s.survives ? 'yes' : 'no'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="thesis-actions">
         <button className="btn ghost sm" onClick={() => setShowCard(v => !v)}>
-          {showCard ? 'Hide research card' : 'Download research card'}
+          {showCard ? 'Hide shareable card' : 'Download shareable PNG'}
         </button>
-        <span className="thesis-actions-hint">Shareable PNG · includes both thesis horizons, verdict, plan and disclaimer.</span>
+        <span className="thesis-actions-hint">PNG · situation, both horizons, verdict, plan and disclaimer.</span>
       </div>
       {showCard && <ResearchCardActions report={report} />}
     </section>

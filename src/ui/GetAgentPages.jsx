@@ -307,7 +307,7 @@ export function PlaybookDetail({ id, user, onClose, onAllocated }) {
 /** ---------------- The Assayer chat page ---------------- */
 
 export function AssayerPage({ user, onAllocated }) {
-  const [messages, setMessages] = useState([{ role: 'assistant', content: 'The Assayer at your service. Tell me an asset and a setup — for example, "build a BTC ETF-flow follow" — and I will draft a Playbook you can review, backtest, and allocate paper capital to.' }])
+  const [messages, setMessages] = useState([{ role: 'assistant', content: 'The Assayer at your service. Tell me a tokenized U.S. stock and a setup — for example, "build an NVDA earnings-drift follow" or "sketch a TSLA post-print fade" — and I will draft a Playbook you can review, backtest, and allocate paper capital to.' }])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [proposed, setProposed] = useState(null)
@@ -338,13 +338,18 @@ export function AssayerPage({ user, onAllocated }) {
       const r = await api('/playbooks', { method: 'POST', token, body: JSON.stringify(proposed) })
       await api(`/playbooks/${r.playbook.id}/publish`, { method: 'POST', token, body: JSON.stringify({ publish: true }) })
       setSavedId(r.playbook.id)
-      setMessages(m => [...m, { role: 'assistant', content: `Saved and published. Playbook id ${r.playbook.id}. The Portfolio tab shows the followed list and live PnL.` }])
+      setMessages(m => [...m, { role: 'assistant', content: `Saved and published as ${r.playbook.id}. It now appears in "My playbooks" below — allocate paper capital to start tracking live PnL against real Bitget prices. It also shows in Portfolio → Followed once you allocate.` }])
       setProposed(null)
+      // Bump the mine-panel refresh key so it re-fetches immediately.
+      setMineRefresh(x => x + 1)
       onAllocated?.()
     } catch (err) {
       setMessages(m => [...m, { role: 'assistant', content: `Save failed: ${err.message}` }])
     } finally { setBusy(false) }
   }
+
+  // Bumping this counter forces MyPlaybooksPanel to re-pull /playbooks/mine.
+  const [mineRefresh, setMineRefresh] = useState(0)
 
   if (!hasApi()) return <div className="empty-report"><b>No adapter attached</b><p>Set <code>VITE_AGENT_API_URL</code> to talk to The Assayer.</p></div>
 
@@ -379,9 +384,165 @@ export function AssayerPage({ user, onAllocated }) {
 
       <div className="commandbar">
         <div className="cb-icon"><MessageCircle size={15} /></div>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !busy && send()} placeholder='e.g. "build a BTC ETF-flow follow" or "sketch an ETH oversold bounce"' />
+        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !busy && send()} placeholder='e.g. "build an NVDA earnings-drift follow" or "sketch an MSFT Azure-beat follow"' />
         <button className="btn primary" onClick={send} disabled={busy}><Send size={13} /> SEND</button>
       </div>
+
+      {user && <MyPlaybooksPanel refreshKey={mineRefresh} onChanged={() => setMineRefresh(x => x + 1)} highlightId={savedId} />}
+    </div>
+  )
+}
+
+/** ---------------- My published + followed playbooks (Assayer + Portfolio) ---------------- */
+
+/**
+ * Shows every Playbook the signed-in user has **published** (drafted in the
+ * Assayer), plus the ones they are actively following with paper capital.
+ *
+ * Renders both the "where does my strategy show up" answer for the Assayer
+ * page — the just-published playbook appears here immediately — and the
+ * running roster of active allocations on the Portfolio page. Allocate /
+ * unfollow buttons are inline; capital changes flow through /paper/credit.
+ */
+export function MyPlaybooksPanel({ refreshKey = 0, onChanged, highlightId, defaultAllocateUsd = 500 }) {
+  const [mine, setMine] = useState({ created: [], followed: [] })
+  const [busyId, setBusyId] = useState(null)
+  const [error, setError] = useState(null)
+  const [amounts, setAmounts] = useState({})
+  const token = getToken()
+
+  useEffect(() => {
+    if (!hasApi() || !token) return
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await api('/playbooks/mine', { token })
+        if (alive) setMine({ created: r.created || [], followed: r.followed || [] })
+      } catch (err) { if (alive) setError(err.message) }
+    })()
+  }, [token, refreshKey])
+
+  if (!token) return null
+
+  const followedIds = new Set(mine.followed.map(f => f.playbook?.id).filter(Boolean))
+  const followedByPlaybook = new Map(mine.followed.map(f => [f.playbook?.id, f.allocation]))
+
+  const allocate = async (playbookId) => {
+    const amountUsd = Number(amounts[playbookId] ?? defaultAllocateUsd)
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) { setError('amount must be positive'); return }
+    setBusyId(playbookId); setError(null)
+    try {
+      await api(`/playbooks/${playbookId}/follow`, { method: 'POST', token, body: JSON.stringify({ amountUsd }) })
+      onChanged?.()
+      const r = await api('/playbooks/mine', { token })
+      setMine({ created: r.created || [], followed: r.followed || [] })
+    } catch (err) { setError(err.message) } finally { setBusyId(null) }
+  }
+  const unfollow = async (playbookId) => {
+    setBusyId(playbookId); setError(null)
+    try {
+      await api(`/playbooks/${playbookId}/unfollow`, { method: 'POST', token })
+      onChanged?.()
+      const r = await api('/playbooks/mine', { token })
+      setMine({ created: r.created || [], followed: r.followed || [] })
+    } catch (err) { setError(err.message) } finally { setBusyId(null) }
+  }
+
+  const fmtPct = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`
+  const fmtUsd = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`
+
+  const nothingCreated = mine.created.length === 0
+  const nothingFollowed = mine.followed.length === 0
+  if (nothingCreated && nothingFollowed) {
+    return (
+      <div className="panel">
+        <div className="panel-head"><h3>My playbooks</h3><small>you have not published or allocated yet</small></div>
+        <div className="empty-body">Draft a Playbook in The Assayer above. Once you publish it, it will land here with an Allocate button and start tracking live PnL against real Bitget prices.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h3>My playbooks</h3>
+        <small>{mine.created.length} published · {mine.followed.length} followed</small>
+      </div>
+      {error && <div className="empty-body red">{error}</div>}
+
+      {mine.created.length > 0 && (
+        <div className="my-pb-section">
+          <div className="my-pb-label">PUBLISHED · DRAFTED IN THE ASSAYER</div>
+          {mine.created.map(p => {
+            const followed = followedIds.has(p.id)
+            const alloc    = followedByPlaybook.get(p.id)
+            const flash    = highlightId && p.id === highlightId
+            return (
+              <div className={`my-pb-row${flash ? ' flash' : ''}`} key={p.id}>
+                <div className="my-pb-title">
+                  <b>{p.title}</b>
+                  <small>{p.asset} · {p.direction} · {p.canonical ? 'canonical' : 'community'}</small>
+                </div>
+                <div className="my-pb-stats">
+                  {p.backtest?.winRate != null && <span><b>{(p.backtest.winRate * 100).toFixed(0)}%</b> win</span>}
+                  {p.backtest?.tradeCount != null && <span>{p.backtest.tradeCount} trades</span>}
+                  {p.followers != null && <span><b>{p.followers}</b> followers</span>}
+                  {p.runtime?.position && <span className="up">OPEN {fmtPct(p.runtime.position.pnlPct)}</span>}
+                </div>
+                <div className="my-pb-actions">
+                  {!followed && (
+                    <>
+                      <input
+                        type="number" min="10" step="10"
+                        value={amounts[p.id] ?? defaultAllocateUsd}
+                        onChange={e => setAmounts(a => ({ ...a, [p.id]: e.target.value }))}
+                        aria-label="allocation amount"
+                      />
+                      <button className="btn primary sm" onClick={() => allocate(p.id)} disabled={busyId === p.id}>
+                        <Wallet size={12} /> {busyId === p.id ? 'Allocating…' : 'Allocate'}
+                      </button>
+                    </>
+                  )}
+                  {followed && alloc && (
+                    <>
+                      <span className="my-pb-pnl">${(alloc.allocatedUsd || 0).toLocaleString()} · <b className={(alloc.currentPnlPct || 0) >= 0 ? 'up' : 'down'}>{fmtPct(alloc.currentPnlPct)}</b> · {fmtUsd(alloc.currentPnlUsd)}</span>
+                      <button className="btn ghost sm" onClick={() => unfollow(p.id)} disabled={busyId === p.id}>
+                        {busyId === p.id ? 'Unfollowing…' : 'Unfollow'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {mine.followed.filter(f => !mine.created.some(c => c.id === f.playbook?.id)).length > 0 && (
+        <div className="my-pb-section">
+          <div className="my-pb-label">FOLLOWED · OTHER USERS' PLAYBOOKS</div>
+          {mine.followed
+            .filter(f => !mine.created.some(c => c.id === f.playbook?.id))
+            .map(({ allocation: a, playbook: p }) => (
+              <div className="my-pb-row" key={a.id}>
+                <div className="my-pb-title">
+                  <b>{p?.title || a.playbookId}</b>
+                  <small>{p?.asset || '—'} · {p?.direction || '—'} · {p?.ownerName || '—'}</small>
+                </div>
+                <div className="my-pb-stats">
+                  <span>${(a.allocatedUsd || 0).toLocaleString()} allocated</span>
+                  <span>started {new Date(a.startedAt).toISOString().slice(0, 10)}</span>
+                </div>
+                <div className="my-pb-actions">
+                  <span className="my-pb-pnl"><b className={(a.currentPnlPct || 0) >= 0 ? 'up' : 'down'}>{fmtPct(a.currentPnlPct)}</b> · {fmtUsd(a.currentPnlUsd)}</span>
+                  <button className="btn ghost sm" onClick={() => unfollow(p?.id || a.playbookId)} disabled={busyId === (p?.id || a.playbookId)}>
+                    {busyId === (p?.id || a.playbookId) ? 'Unfollowing…' : 'Unfollow'}
+                  </button>
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   )
 }

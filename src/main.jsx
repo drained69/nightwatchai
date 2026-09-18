@@ -29,7 +29,7 @@ function applyLiveTickers(rows, tickers) {
   })
 }
 import { runBacktestSynthetic } from './backtest.js'
-import { AssayerPage, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
+import { AssayerPage, MyPlaybooksPanel, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
 import { ResearchCardActions } from './ui/ResearchCard.jsx'
@@ -549,7 +549,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
           </div>
           <div className="topbar-right">
             <span className="ticker-tape">
-              {['NVDA','TSLA','AAPL','MSFT','MSTR','COIN','BTC','ETH'].map(sym => {
+              {['NVDA','TSLA','AAPL','MSFT','AMD','META','MSTR','COIN','BTC'].map(sym => {
                 const m = session.markets.find(x => x.symbol === sym) || session.universe.find(x => x.symbol === sym)
                 if (!m) return null
                 return <span key={sym}><b>{sym}</b> ${fmtPrice(m.price)} <em className={m.change24h >= 0 ? 'up' : 'down'}>{fmtPct(m.change24h / 100)}</em></span>
@@ -1058,25 +1058,11 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
         <div><small>LOCAL CLOSED</small><b>{closed.length}</b></div>
       </div>
 
-      {mine.followed.length > 0 && (
-        <div className="panel">
-          <div className="panel-head"><h3>Followed playbooks</h3><small>{mine.followed.length} · live PnL from real Bitget prices</small></div>
-          <div className="pos-table">
-            <div className="pos-head"><span>Playbook</span><span>Asset</span><span>Dir</span><span>Allocated</span><span>Live PnL %</span><span>Live PnL $</span><span>Started</span></div>
-            {mine.followed.map(({ allocation: a, playbook: p }) => (
-              <div className="pos-row" key={a.id}>
-                <b>{p?.title || a.playbookId}</b>
-                <span className="mono muted">{p?.asset || '—'}</span>
-                <span className={p?.direction === 'LONG' ? 'pill green mini' : 'pill amber mini'}>{p?.direction || '—'}</span>
-                <b className="mono">${(a.allocatedUsd || 0).toLocaleString()}</b>
-                <b className={(a.currentPnlPct || 0) >= 0 ? 'up mono' : 'down mono'}>{fmtPct(a.currentPnlPct || 0)}</b>
-                <b className={(a.currentPnlUsd || 0) >= 0 ? 'up mono' : 'down mono'}>{fmtAbs(a.currentPnlUsd || 0)}</b>
-                <span className="mono muted">{a.startedAt ? new Date(a.startedAt).toISOString().slice(0, 10) : '—'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Single source of truth for both published + followed playbooks. The
+          same panel renders inside The Assayer so a freshly-drafted strategy
+          is instantly actionable from the page it was created on. */}
+      <MyPlaybooksPanel />
+
 
       {impact ? <ImpactCard impact={impact} /> : null}
 
@@ -1884,7 +1870,7 @@ function AuthTicker() {
     return () => { alive = false; clearInterval(t) }
   }, [])
   if (!tickers) return <div className="auth-marquee-empty" aria-hidden />
-  const symbols = ['NVDA', 'TSLA', 'AAPL', 'BTC', 'ETH', 'MSTR', 'COIN']
+  const symbols = ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMD', 'META', 'MSTR', 'COIN', 'BTC']
   return (
     <div className="auth-marquee-inner">
       {symbols.map(sym => {

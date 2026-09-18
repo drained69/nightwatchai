@@ -1297,3 +1297,44 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   .change-list li { grid-template-columns: 1fr }
   .stress-head, .stress-row { grid-template-columns: 1.4fr 1fr 0.7fr 0.7fr; font-size: 11px }
 }
+
+/* ============================================================= My playbooks panel */
+.my-pb-section { padding: 4px 20px 12px }
+.my-pb-label {
+  padding: 12px 0 8px; margin-bottom: 4px;
+  font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px dotted var(--line-soft);
+}
+.my-pb-row {
+  display: grid; grid-template-columns: 1.6fr 1fr auto;
+  gap: 14px; align-items: center;
+  padding: 12px 4px; border-bottom: 1px dotted var(--line-soft);
+  font: 400 12px 'IBM Plex Mono';
+}
+.my-pb-row:last-child { border-bottom: 0 }
+.my-pb-row.flash {
+  background: linear-gradient(90deg, rgba(93, 191, 145, 0.14), transparent 70%);
+  animation: mypbFlash 2.4s ease-out;
+}
+@keyframes mypbFlash {
+  0%   { background: rgba(93, 191, 145, 0.28) }
+  100% { background: transparent }
+}
+.my-pb-title b { display: block; color: var(--text); font: 500 13px 'DM Sans', sans-serif }
+.my-pb-title small { display: block; margin-top: 3px; color: var(--muted); font: 400 10px 'IBM Plex Mono'; letter-spacing: 0.4px }
+.my-pb-stats { display: flex; flex-wrap: wrap; gap: 10px; color: var(--text-2); font-size: 11px }
+.my-pb-stats b { color: var(--text); font-weight: 600 }
+.my-pb-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end }
+.my-pb-actions input {
+  width: 90px; padding: 6px 8px;
+  border: 1px solid var(--line-soft); background: var(--panel-2);
+  color: var(--text); font: 500 12px 'IBM Plex Mono'; text-align: right;
+}
+.my-pb-pnl { font: 500 12px 'IBM Plex Mono'; color: var(--text-2); white-space: nowrap }
+.my-pb-pnl b { font-weight: 700 }
+.empty-body.red { color: var(--down) }
+
+@media (max-width: 720px) {
+  .my-pb-row { grid-template-columns: 1fr; gap: 8px }
+  .my-pb-actions { justify-content: flex-start }
+}

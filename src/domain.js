@@ -296,6 +296,52 @@ export function inferAsset(question) {
   return null
 }
 
+const GENERIC_QUESTION_WORDS = new Set(`
+a an the is are was were be been being am of in on at to for from with without into onto over under by
+i you he she it we they me him her us them my your his its our their this that these those there here
+and or not no nor but if then than so as do does did done can could should would will shall may might must
+what why how when where which who whom whose
+doing going get gets got make makes made take takes want wants need needs think seems looks mean means
+just only even still also both each every many much some any all very really more most less least new old
+big small high low higher lower above below top bottom dip dips drop drops rally rallies gain gains fall falls rise rises
+buy sell buying selling bought sold long short hold holding holds trade trades trading trader invest investing investment
+research analyze analysis check look looking give tell explain report review thesis stress test challenge
+price prices move moves moving moved pump dump breakout breakdown setup opportunity opportunities scan
+market markets tape day days week weeks today tonight tomorrow yesterday overnight weekend now current currently
+good bad best worst strong weak strongest weakest bullish bearish neutral right worth shouldnt doesnt dont isnt arent
+crypto cryptocurrency stock stocks equity equities token tokens coin listing listed ipo etf airdrop presale
+altcoin altcoins memecoin stablecoin bitcoin ethereum solana dogecoin cardano avalanche coinbase
+portfolio position positions size sizing entry stop target risk reward pnl profit loss exposure allocation
+news headline catalyst sentiment volume liquidity funding correlation regime macro fed rate rates dollar
+question questions ticker tickers random name names asset assets symbol symbols universe coverage covered
+support supported please yes yeah ok okay hey hi hello about around up down out side sides play plays
+call calls put puts order orders execute execution slice simulate simulation paper real money cash
+flow flows stake staking yield apy tvl dominance halving
+everything anything something nothing someone anyone
+`.split(/\s+/).filter(Boolean))
+
+const UNIVERSE_WORDS = new Set(
+  DEMO_UNIVERSE.flatMap(a => [a.symbol.toLowerCase(), ...a.name.toLowerCase().split(/\s+/)])
+)
+
+/**
+ * Names mentioned in a question that inferAsset could NOT resolve — i.e. the
+ * user asked about an asset outside the coverage universe (e.g. "Dangote IPO").
+ * Returns lowercase candidates; empty array means the question is generic and
+ * the usual BTC default is safe.
+ */
+export function uncoveredAssetCandidates(question) {
+  const q = (question || '').toLowerCase()
+  const tokens = q.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)
+  const candidates = []
+  for (const t of tokens) {
+    if (t.length < 3 || !/^[a-z]/.test(t)) continue          // skip numbers, 1-2 letter fragments
+    if (GENERIC_QUESTION_WORDS.has(t) || UNIVERSE_WORDS.has(t)) continue
+    if (!candidates.includes(t)) candidates.push(t)
+  }
+  return candidates
+}
+
 /* ------------------------------------------ Deterministic per-asset seed hash */
 
 function hash(str) {

@@ -13,6 +13,7 @@ import { promisify } from 'node:util'
 import { sign, verify } from './jwt.mjs'
 import { createUser, getUser, findUserByEmail, upsertUser } from './store.mjs'
 import { logger } from './log.mjs'
+import { sendEmail } from './mailer.mjs'
 
 const scrypt = promisify(crypto.scrypt)
 const SCRYPT_N = 16384, SCRYPT_R = 8, SCRYPT_P = 1, SCRYPT_KEYLEN = 64
@@ -192,8 +193,6 @@ export async function verifySignInCode({ email, code, name }) {
  * response includes `previewCode` in that case).
  */
 async function sendSignInCode(email, code) {
-  const RESEND_KEY = process.env.RESEND_API_KEY
-  const FROM = process.env.EMAIL_FROM || 'NIGHTWATCH AI <onboarding@resend.dev>'
   const subject = `Your NIGHTWATCH sign-in code is ${code}`
   const html = `
 <!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#0e0f11;color:#e6e6e6;padding:32px">
@@ -205,33 +204,15 @@ async function sendSignInCode(email, code) {
     <p style="color:#9aa0a6;font-size:13px;line-height:1.6">This code expires in 10 minutes. If you didn't request it, ignore this message.</p>
   </div>
 </body></html>`.trim()
-  if (RESEND_KEY) {
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: FROM, to: email, subject, html }),
-        signal: AbortSignal.timeout(10000),
-      })
-      if (!res.ok) {
-        const body = await res.text()
-        // Log the code for the operator to recover it from server logs if
-        // needed (never returned to the client).
-        logger.warn({ status: res.status, body: body.slice(0, 200) }, 'resend refused send')
-        logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
-        return { transport: 'send-failed', status: res.status }
-      }
-      return { transport: 'resend' }
-    } catch (err) {
-      logger.warn({ err: err.message }, 'resend threw')
-      logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
-      return { transport: 'send-failed', status: 0 }
-    }
+  const r = await sendEmail({ to: email, subject, html })
+  if (r.transport === 'send-failed') {
+    // Log the code for the operator to recover from server logs (never
+    // returned to the client — requestSignInCode enforces that).
+    logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
+  } else if (r.transport === 'log') {
+    logger.info({ email, code }, 'SIGN-IN CODE (no email provider — set RESEND_API_KEY to send real email)')
   }
-  // No email provider configured — treat as local dev. requestSignInCode is
-  // the gate that decides whether to actually expose previewCode.
-  logger.info({ email, code }, 'SIGN-IN CODE (no email provider — set RESEND_API_KEY to send real email)')
-  return { transport: 'log' }
+  return { transport: r.transport, status: r.status }
 }
 
 export async function signup({ email, password, name }) {

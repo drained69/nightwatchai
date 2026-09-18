@@ -55,6 +55,10 @@ import * as Allocations from './allocations.mjs'
 import { paperSnapshot, resetPaperAccount, creditPnl } from './paper.mjs'
 import { chat as assayerChat } from './assayer.mjs'
 import { buildLiveContext, liveUniverseStatus, getMacro } from './market-context.mjs'
+import { mailerStatus } from './lib/mailer.mjs'
+import { loadLatestBrief, loadBriefByDate, listBriefDates, _paths as nw02Paths } from './nightwatch02.mjs'
+import { makeScheduler } from './nightwatch02-scheduler.mjs'
+import { setSubscription, getSubscription, findByUnsubscribeToken, listActiveSubscribers } from './nightwatch02-subscriptions.mjs'
 
 import { LocalNightwatchEngine, DEMO_UNIVERSE } from '../src/domain.js'
 import { runBacktestFromCandles } from '../src/backtest.js'
@@ -114,6 +118,11 @@ if (NEWS_ENABLED) news.start()
 SignalHistory.startEvaluator()
 // Alerts evaluator
 Alerts.startEvaluator({ sendPush: sendUserPush })
+// NIGHTWATCH 02:00 daily brief scheduler (02:00 UTC by default). The scheduler
+// runs in-process, is timezone-aware, and catches up on boot if today's brief
+// window has already passed and no brief file exists yet.
+const nw02 = makeScheduler({ newsStore: news, engine })
+nw02.start()
 
 // Playbook runtime — evaluate published playbooks against live context every 60s
 async function playbookCtx(asset) {
@@ -302,6 +311,8 @@ const server = http.createServer(async (req, res) => {
         provider: { llm: llm.provider, model: llm.model, bitgetMcp: Boolean(BITGET_MCP_URL) },
         news: { enabled: NEWS_ENABLED, seen: news._items.length, feeds: FEEDS.length },
         universe: { total: DEMO_UNIVERSE.length, ...liveUniverseStatus() },
+        mailer: mailerStatus(),
+        nightwatch02: { ...nw02.status(), subscribers: listActiveSubscribers().length },
         uptimeSec: Math.round((Date.now() - metrics.started) / 1000),
       })
     }
@@ -904,6 +915,91 @@ const server = http.createServer(async (req, res) => {
       if (!body?.endpoint) return json(res, 400, { error: 'endpoint required' })
       savePushSubscription(user.id, body)
       return json(res, 200, { ok: true })
+    }
+
+    // NIGHTWATCH 02:00 — daily brief + subscriptions
+    if (route === 'GET /nightwatch/latest') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const brief = loadLatestBrief()
+      if (!brief) return json(res, 404, { error: 'no brief published yet — the first one is generated at 02:00 UTC' })
+      return json(res, 200, brief)
+    }
+    if (route === 'GET /nightwatch/list') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const limit = limitParam(url.searchParams.get('limit'), 14, 60)
+      return json(res, 200, { dates: listBriefDates(limit) })
+    }
+    if (route === 'GET /nightwatch/status') {
+      // Public, cheap — surfaces schedule + mailer state so the UI can show
+      // "next brief at 02:00 UTC" and warn when email delivery isn't wired.
+      return json(res, 200, { scheduler: nw02.status(), mailer: mailerStatus() })
+    }
+    if (route === 'GET /nightwatch/subscription') {
+      const user = requireAuth(req, res); if (!user) return
+      const sub = getSubscription(user.email)
+      return json(res, 200, {
+        email: user.email,
+        enabled: Boolean(sub?.enabled),
+        subscribedAt: sub?.createdAt || null,
+        updatedAt: sub?.updatedAt || null,
+        mailerReady: mailerStatus().canDeliver,
+      })
+    }
+    if (route === 'POST /nightwatch/subscription') {
+      const user = requireAuth(req, res); if (!user) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      // The user's account email is the source of truth. If the client hands
+      // us a different address we refuse — subscriptions are keyed to the
+      // signed-in identity, otherwise anyone could subscribe strangers.
+      const targetEmail = String(body?.email || user.email).toLowerCase().trim()
+      if (targetEmail !== user.email.toLowerCase()) {
+        return json(res, 400, { error: 'subscription email must match the signed-in account email' })
+      }
+      try {
+        const sub = setSubscription({ email: user.email, enabled: body?.enabled !== false, userId: user.id, source: 'ui' })
+        return json(res, 200, {
+          email: sub.email, enabled: sub.enabled, updatedAt: sub.updatedAt,
+          mailerReady: mailerStatus().canDeliver,
+        })
+      } catch (err) { return json(res, 400, { error: err.message }) }
+    }
+    // One-click unsubscribe from an email link. GET-only so it works from any
+    // mail client; returns a tiny confirmation page rather than JSON.
+    if (route.startsWith('GET /nightwatch/unsubscribe/')) {
+      const token = url.pathname.split('/').pop()
+      const sub = findByUnsubscribeToken(token)
+      cors(res); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      if (!sub) {
+        res.end('<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribe link expired</h1><p>Please toggle "Daily email" off from the NIGHTWATCH 02:00 page in the app.</p></body></html>')
+        return
+      }
+      setSubscription({ email: sub.email, enabled: false, userId: sub.userId, source: 'email-unsubscribe' })
+      res.end(`<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribed</h1><p><b>${sub.email}</b> will no longer receive the daily 02:00 UTC brief. You can turn it back on any time from the NIGHTWATCH 02:00 page.</p></body></html>`)
+      return
+    }
+    // Admin/dev trigger. In production, require ADMIN_TOKEN header; in dev,
+    // any authenticated user can fire it so the demo doesn't need to wait
+    // until 02:00 UTC.
+    if (route === 'POST /nightwatch/run') {
+      const isProd = process.env.NODE_ENV === 'production'
+      const adminToken = process.env.ADMIN_TOKEN
+      if (isProd) {
+        if (!adminToken || req.headers['x-admin-token'] !== adminToken) return json(res, 403, { error: 'admin token required' })
+      } else {
+        const user = requireAuth(req, res); if (!user) return
+      }
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
+      const result = await nw02.runNow()
+      if (!result) return json(res, 409, { error: 'a run is already in progress' })
+      return json(res, 200, result)
+    }
+    // Date-parametrized fetch — narrower routes above win first.
+    if (route.startsWith('GET /nightwatch/')) {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const key = url.pathname.split('/').pop()
+      const brief = loadBriefByDate(key)
+      if (!brief) return json(res, 404, { error: `no brief for ${key}` })
+      return json(res, 200, brief)
     }
 
     // Client-side crash telemetry (see src/ui/ErrorBoundary.jsx). Fire-and-forget

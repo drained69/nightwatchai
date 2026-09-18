@@ -131,6 +131,7 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 
 | Page | Purpose |
 |---|---|
+| **NIGHTWATCH 02:00** | Daily AI market intelligence brief. Sectors, unusual movements, ranked alpha candidates with short/long thesis, risks, invalidation. Auto-generated at 02:00 UTC; opt-in email delivery. |
 | **Research** | Natural-language terminal. Streams the 5-skill research process live and renders a structured report. |
 | **Analysis** | Single-symbol desk analysis: ticker + indicators + book + positioning + macro + news → Qwen 4-part writeup with verdict and levels. |
 | **News** | Live news tape with AI impact analysis per asset. High-relevance items trigger toast + push. |
@@ -142,6 +143,41 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 | **History** | Every research report, decision, review, and session log. |
 | **Assayer** | AI chat companion that drafts Playbooks from plain-English prompts. |
 | **Settings** | Trader profile, watchlist, Bitget MCP connection status with setup steps. |
+
+---
+
+## NIGHTWATCH 02:00 — Daily Brief
+
+Every day at **02:00 UTC** the server runs a full market scan and publishes an AI market intelligence brief:
+
+```
+02:00 UTC
+ → scan live universe (Bitget spot + tokenized-equity R-pairs, macro, news store)
+ → rank alpha candidates (24h move · volume z-score · news attention)
+ → for each finalist, run the same LocalNightwatchEngine.research the
+   Research tab uses → produces situation / short-term thesis / long-term
+   thesis / risks / invalidation / stress tests
+ → persist to <DATA_DIR>/nightwatch02/briefs/YYYY-MM-DD.json
+   and <DATA_DIR>/nightwatch02/latest.json
+ → email every subscribed address (opt-in) with an HTML summary that
+   links back to the Thesis Card
+```
+
+**Nothing is fabricated.** All prices, news items and timestamps come from the same real data pipeline as the Research tab. Missing data is reported as `null` and labeled in the UI/email. The brief carries an explicit disclaimer and never claims a guaranteed profit.
+
+**Reliability.** The scheduler is timezone-aware, uses a single `setTimeout` (not per-minute polling), and catches up on boot: if the server was down at 02:00 UTC and today's brief file is missing, one is generated immediately.
+
+**Email opt-in.** Users toggle "Send me the NIGHTWATCH 02:00 report every day" from the page itself. The subscription is keyed to the signed-in account email — no one can subscribe a stranger. Every email includes a one-click unsubscribe link (`GET /nightwatch/unsubscribe/:token`).
+
+**Setup checklist:**
+
+1. Set `RESEND_API_KEY` and (recommended) `EMAIL_FROM` to a domain-verified sender.
+2. Set `APP_URL` to your public URL so email links resolve correctly.
+3. In production, set `ADMIN_TOKEN` if you want to allow `POST /nightwatch/run`.
+4. Optionally override `NIGHTWATCH_02_HOUR` / `NIGHTWATCH_02_MINUTE` — defaults `02` / `00` UTC.
+5. Confirm `/health` reports `mailer.canDeliver: true` and `nightwatch02.enabled: true`.
+
+Without `RESEND_API_KEY`, the toggle still records the preference (the brief still generates and is visible in the app) but no email is sent — `/health` and `/nightwatch/status` both surface this honestly (`mailer.provider: "log-only"`).
 
 ---
 
@@ -299,6 +335,12 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | `BITGET_MCP_URL` | Route the 5 bitget-signal skills to the Bitget MCP sidecar | Optional |
 | `BITGET_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | Bitget Agentic Account OAuth for live paper routing | Optional |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | Web Push notifications | Optional |
+| `RESEND_API_KEY` | Real transactional email — sign-in codes AND the daily NIGHTWATCH 02:00 brief. Without it, both features fall back to server-log delivery only. | Required for email |
+| `EMAIL_FROM` | `From:` address for outbound mail. Default `NIGHTWATCH AI <onboarding@resend.dev>`. Set to a domain-verified sender in Resend for production. | Optional |
+| `APP_URL` | Absolute URL used in email links (open-in-app, unsubscribe). Default `http://localhost:8787`. | Recommended for email |
+| `NIGHTWATCH_02_HOUR` / `NIGHTWATCH_02_MINUTE` | When the daily brief fires, in UTC. Defaults to `02` / `00`. | No |
+| `NIGHTWATCH_02_ENABLED` | Set to `0` to disable the scheduler (still exposes `/nightwatch/run`). | No |
+| `ADMIN_TOKEN` | In production, required in the `X-Admin-Token` header for `POST /nightwatch/run`. In development any authenticated user can trigger a run. | Production |
 | `PORT` / `HOST` | Server bind (default `8787` / `0.0.0.0`) | No |
 | `CORS_ORIGIN` | Restrict browser access in production | Production |
 | `NIGHTWATCH_DATA_DIR` | Per-user JSON storage location (default `./data`) | No |
@@ -389,6 +431,19 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 |---|---|---|---|
 | POST | `/copilot/portfolio` | Correlation + factor + sector analysis of a book | — |
 | GET | `/copilot/correlation/:symbol` | 30-day correlation of symbol vs BTC | — |
+
+### NIGHTWATCH 02:00
+
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| GET | `/nightwatch/latest` | Latest published daily brief (404 until first run) | — |
+| GET | `/nightwatch/list?limit=14` | Dates of the last N briefs on disk | — |
+| GET | `/nightwatch/:YYYY-MM-DD` | Read one historical brief by date | — |
+| GET | `/nightwatch/status` | Scheduler + mailer state (next fire, last run, delivery config) | — |
+| GET | `/nightwatch/subscription` | Current subscription state for the signed-in account | JWT |
+| POST | `/nightwatch/subscription` | Enable / disable daily email (`{ email, enabled }`) | JWT |
+| GET | `/nightwatch/unsubscribe/:token` | One-click unsubscribe from an email footer | — |
+| POST | `/nightwatch/run` | Fire the pipeline immediately | JWT (dev) / `X-Admin-Token` (prod) |
 
 ---
 

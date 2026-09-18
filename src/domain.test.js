@@ -5,7 +5,7 @@ import {
   PaperExecution, applyTraderDecision, buildResearchReport, buildReview,
   classifyIntent, coerceSession, findOpportunities, fmtCap, fmtPct, fmtPrice,
   inferAsset, initialSession, migrateFromLegacy, portfolioImpact, runSkillPack,
-  stressTestThesis, synthesizeSignal,
+  stressTestThesis, synthesizeSignal, uncoveredAssetCandidates,
 } from './domain.js'
 
 /* ---------- Universe + formatters ---------- */
@@ -45,6 +45,14 @@ test('inferAsset finds the ticker even inside a sentence', () => {
   assert.equal(inferAsset('what is BTC doing here'), 'BTC')
   assert.equal(inferAsset('is Alphabet a buy?'), 'GOOGL')
   assert.equal(inferAsset('random question with no ticker'), null)
+})
+
+test('uncoveredAssetCandidates flags names outside the coverage universe', () => {
+  assert.deepEqual(uncoveredAssetCandidates('research on dangote ipo if its a good buy or not'), ['dangote'])
+  assert.deepEqual(uncoveredAssetCandidates('is Aramco worth buying?'), ['aramco'])
+  assert.deepEqual(uncoveredAssetCandidates('why is the market down today'), [])
+  assert.deepEqual(uncoveredAssetCandidates('what is BTC doing here'), [])
+  assert.deepEqual(uncoveredAssetCandidates('should I buy the dip on crypto'), [])
 })
 
 /* ---------- Skill pack + signal synthesis ---------- */

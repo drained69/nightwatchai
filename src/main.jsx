@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
   CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
-  LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
+  LineChart, LogOut, MessageCircle, Menu, MoonStar, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
 import './styles.css'
@@ -32,17 +32,20 @@ import { runBacktestSynthetic } from './backtest.js'
 import { AssayerPage, MyPlaybooksPanel, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
+import { Nightwatch02Page } from './ui/Nightwatch02Page.jsx'
 import { ResearchCardActions } from './ui/ResearchCard.jsx'
 import {
-  BITGET_CONNECTION_HELP, BITGET_SIGNAL_SKILLS, DEMO_NEWS,
+  BITGET_CONNECTION_HELP, BITGET_SIGNAL_SKILLS, DEMO_NEWS, DEMO_UNIVERSE,
   DemoMarketData, NightwatchProvider, PaperExecution,
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
   fmtPct, fmtPrice, ingestNewsItem, initialSession, loadSession, nowClock,
   pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
+  uncoveredAssetCandidates,
 } from './domain'
 
 const NAV = [
+  { id: 'nightwatch02',label: 'NIGHTWATCH 02:00', icon: MoonStar },
   { id: 'research',    label: 'Research',    icon: BrainCircuit },
   { id: 'analysis',    label: 'Analysis',    icon: Crosshair },
   { id: 'assayer',     label: 'The Assayer', icon: MessageCircle },
@@ -325,6 +328,17 @@ function App({ authUser: signedInUser, onSignedOut }) {
     setLiveTrace([])
     const routed = classifyIntent(text)
     setSession(s => addLog({ ...s, stage: 'INTAKE' }, 'USER', text, `Intent: ${routed.intent}${routed.asset ? ' · ' + routed.asset : ''}`))
+    // Uncovered name (e.g. "research on Dangote IPO"): refuse instead of
+    // silently falling back to a BTC report the user never asked for.
+    if (!routed.asset && routed.intent !== 'find-opportunities' && routed.intent !== 'review') {
+      const unknown = uncoveredAssetCandidates(text)
+      if (unknown.length) {
+        setSession(s => addLog({ ...s, stage: 'INTAKE' }, 'ERROR', `Unsupported asset: "${unknown[0]}"`, `Coverage: ${DEMO_UNIVERSE.map(a => a.symbol).join(', ')}`))
+        notify(`"${unknown[0]}" isn't in this desk's coverage universe. Supported: ${DEMO_UNIVERSE.map(a => a.symbol).join(', ')}.`)
+        setRunning(false)
+        return
+      }
+    }
     try {
       if      (routed.intent === 'research')            await runResearch(text, routed)
       else if (routed.intent === 'thesis-test')         await runThesis(text)
@@ -562,6 +576,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
         {/* Per-page boundary (keyed on page): a malformed server payload crashes
             one tab, not the whole workstation; navigating resets the boundary. */}
         <ErrorBoundary key={page}>
+        {page === 'nightwatch02' && <Nightwatch02Page user={authUser} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
         {page === 'research'  && <ResearchPage {...{ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact }} />}
         {page === 'analysis'  && <AnalysisPage />}
         {page === 'news'      && <NewsPage session={session} setSession={setSession} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}

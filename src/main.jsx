@@ -77,6 +77,10 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const [liveTrace, setLiveTrace] = useState([])
   const [activeArtifact, setActiveArtifact] = useState(null)
   const [openPlaybookId, setOpenPlaybookId] = useState(null)
+  // Last query the desk had to refuse because the asset is not in the coverage
+  // universe (e.g. "Dangote IPO"). Persists in the report area until the next
+  // successful research so the user can never miss the honest refusal.
+  const [unsupportedAsk, setUnsupportedAsk] = useState(null)
   const authToken = getToken()
   const [bitgetStatus, setBitgetStatus] = useState({ connected: false, model: null, reason: 'checking…' })
   const [personalHydrated, setPersonalHydrated] = useState(false)
@@ -162,7 +166,14 @@ function App({ authUser: signedInUser, onSignedOut }) {
   ])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
   useEffect(() => { const t = setInterval(() => setClock(nowClock()), 1000); return () => clearInterval(t) }, [])
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 3400); return () => clearTimeout(t) }, [toast])
+  useEffect(() => {
+    if (!toast) return
+    // Coverage / rejection notices deserve a longer dwell time so the user
+    // actually reads them; casual "report ready" toasts auto-clear quickly.
+    const isImportant = /coverage universe|isn't in|unsupported/i.test(toast)
+    const t = setTimeout(() => setToast(''), isImportant ? 9000 : 3400)
+    return () => clearTimeout(t)
+  }, [toast])
 
   // Mark-to-market ticker for paper positions. In real-product mode the adapter
   // owns prices (see /prices/live hydrate + /prices/stream below); we only fall
@@ -333,12 +344,20 @@ function App({ authUser: signedInUser, onSignedOut }) {
     if (!routed.asset && routed.intent !== 'find-opportunities' && routed.intent !== 'review') {
       const unknown = uncoveredAssetCandidates(text)
       if (unknown.length) {
-        setSession(s => addLog({ ...s, stage: 'INTAKE' }, 'ERROR', `Unsupported asset: "${unknown[0]}"`, `Coverage: ${DEMO_UNIVERSE.map(a => a.symbol).join(', ')}`))
-        notify(`"${unknown[0]}" isn't in this desk's coverage universe. Supported: ${DEMO_UNIVERSE.map(a => a.symbol).join(', ')}.`)
+        const token = unknown[0]
+        setSession(s => addLog({ ...s, stage: 'INTAKE' }, 'ERROR', `Unsupported asset: "${token}"`, `Coverage: ${DEMO_UNIVERSE.map(a => a.symbol).join(', ')}`))
+        // Persistent card in the report area — the toast alone auto-dismisses
+        // in ~3s and users would keep clicking Run Research thinking nothing
+        // happened. This stays put until they run something we can serve.
+        setUnsupportedAsk({ token, question: text, at: Date.now() })
+        setActiveArtifact(null)
+        notify(`"${token}" isn't in this desk's coverage universe. Try one of: ${DEMO_UNIVERSE.map(a => a.symbol).slice(0, 8).join(', ')}…`)
         setRunning(false)
         return
       }
     }
+    // Reaching a real intent — clear any stale "unsupported" card.
+    setUnsupportedAsk(null)
     try {
       if      (routed.intent === 'research')            await runResearch(text, routed)
       else if (routed.intent === 'thesis-test')         await runThesis(text)
@@ -577,7 +596,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
             one tab, not the whole workstation; navigating resets the boundary. */}
         <ErrorBoundary key={page}>
         {page === 'nightwatch02' && <Nightwatch02Page user={authUser} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
-        {page === 'research'  && <ResearchPage {...{ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact }} />}
+        {page === 'research'  && <ResearchPage {...{ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact, unsupportedAsk, dismissUnsupported: () => setUnsupportedAsk(null) }} />}
         {page === 'analysis'  && <AnalysisPage />}
         {page === 'news'      && <NewsPage session={session} setSession={setSession} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
         {page === 'markets'   && <MarketsPage session={session} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} toggleWatch={toggleWatch} />}
@@ -603,7 +622,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
 
 /* --------------------------------------------------- Research page (hero) */
 
-function ResearchPage({ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact }) {
+function ResearchPage({ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact, unsupportedAsk, dismissUnsupported }) {
   const skillState = BITGET_SIGNAL_SKILLS.map((spec, idx) => {
     const done = liveTrace.find(t => t.skill === spec.id)
     const inFlight = running && !done && liveTrace.length >= idx
@@ -654,7 +673,9 @@ function ResearchPage({ command, setCommand, submit, running, session, liveTrace
 
       {activeArtifact?.type === 'execution' ? <ExecutionCard payload={activeArtifact.payload} /> : null}
 
-      {activeReport ? (
+      {unsupportedAsk ? (
+        <UnsupportedAssetCard ask={unsupportedAsk} onDismiss={dismissUnsupported} onPickSymbol={(sym) => { const q = `Research ${sym} and tell me whether the current move is sustainable.`; submit(q) }} />
+      ) : activeReport ? (
         <ResearchReportView report={activeReport} decide={decide} session={session} closeAtMark={closeAtMark} />
       ) : (
         <div className="empty-report">
@@ -663,6 +684,42 @@ function ResearchPage({ command, setCommand, submit, running, session, liveTrace
           <p>Ask a research question above, or pick a suggestion. NIGHTWATCH will invoke the 5 Bitget research skills and stream evidence into a structured report.</p>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Honest refusal card shown when the user asks about an asset the desk cannot
+ * cover (e.g. a Nigerian IPO, an unlisted altcoin, a stock outside the mapped
+ * tokenized-equity set). Better than silently defaulting to BTC.
+ */
+function UnsupportedAssetCard({ ask, onDismiss, onPickSymbol }) {
+  const equities = DEMO_UNIVERSE.filter(a => a.class !== 'crypto').slice(0, 10)
+  const crypto   = DEMO_UNIVERSE.filter(a => a.class === 'crypto').slice(0, 6)
+  return (
+    <div className="unsupported-report" role="alert">
+      <div className="unsupported-head">
+        <AlertTriangle size={16} />
+        <b>Not in this desk's coverage</b>
+        <button className="btn ghost xs" onClick={onDismiss} aria-label="dismiss">✕</button>
+      </div>
+      <p className="unsupported-body">
+        You asked about <b>“{ask.token}”</b>, but NIGHTWATCH only researches assets it can quote from Bitget spot
+        (crypto + a curated list of tokenized U.S. equities). It won't fabricate a report on an asset it can't price.
+      </p>
+      <div className="unsupported-quote">“{ask.question}”</div>
+      <div className="unsupported-label">Try one of these instead</div>
+      <div className="unsupported-symbols">
+        {equities.map(a => (
+          <button key={a.symbol} className="chip" onClick={() => onPickSymbol(a.symbol)}>{a.symbol} <em>{a.name}</em></button>
+        ))}
+      </div>
+      <div className="unsupported-symbols muted">
+        <span className="unsupported-label small">Crypto</span>
+        {crypto.map(a => (
+          <button key={a.symbol} className="chip mini" onClick={() => onPickSymbol(a.symbol)}>{a.symbol}</button>
+        ))}
+      </div>
     </div>
   )
 }

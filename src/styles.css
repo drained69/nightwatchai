@@ -1507,3 +1507,40 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   .nw02-cand-signal { align-items: flex-start }
   .nw02-subscribe { grid-template-columns: 1fr; text-align: left }
 }
+
+/* ============================================================= unsupported asset refusal */
+.unsupported-report {
+  margin: 24px 0; padding: 24px 26px;
+  border: 6px double var(--accent);
+  outline: 1px solid var(--line);
+  background: var(--panel);
+  position: relative;
+}
+.unsupported-head {
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 12px; border-bottom: 1px dotted var(--line-soft);
+  margin-bottom: 14px;
+  color: var(--accent-2);
+}
+.unsupported-head b { font: 400 20px 'DM Serif Display', Georgia, serif; flex: 1 }
+.unsupported-head .btn.xs { padding: 2px 8px; font-size: 11px }
+.unsupported-body {
+  margin: 0 0 12px; color: var(--text); font-size: 14px; line-height: 1.7;
+}
+.unsupported-quote {
+  padding: 10px 14px; margin: 8px 0 18px;
+  background: var(--panel-2); border-left: 3px solid var(--accent);
+  color: var(--muted); font: italic 400 13px 'DM Serif Display', Georgia, serif;
+}
+.unsupported-label {
+  font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--muted); margin: 12px 0 8px;
+}
+.unsupported-label.small { display: inline-block; margin-right: 10px; margin-top: 4px }
+.unsupported-symbols { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.unsupported-symbols .chip { padding: 6px 10px }
+.unsupported-symbols .chip em {
+  color: var(--muted); font-style: normal; margin-left: 6px; font-size: 10px;
+}
+.unsupported-symbols .chip.mini { padding: 4px 8px; font-size: 11px }
+.btn.xs { padding: 4px 8px; font: 500 11px 'IBM Plex Mono', monospace }

@@ -1426,7 +1426,7 @@ function NewsPage({ session, setSession, onAsk }) {
                   <b>{item.headline}</b>
                   <em>Primary impact · {top?.symbol} {top?.direction.toLowerCase()} · {(top?.magnitude * 100).toFixed(0)}%</em>
                   <div className="row-actions">
-                    <button className="chip mini" onClick={() => onAsk(`Research ${top?.symbol} — how does this news affect the setup?`)}>RESEARCH →</button>
+                    <button className="chip mini" onClick={() => onAsk(`Research ${top?.symbol} — what does this news mean for the current setup?`)}>RESEARCH →</button>
                     <a className="chip mini" href={top?.bitgetUrl} target="_blank" rel="noreferrer noopener">TRADE ON BITGET <ExternalLink size={9} /></a>
                     <button className="chip mini" onClick={() => dismissAlert(item.id)}>DISMISS</button>
                   </div>

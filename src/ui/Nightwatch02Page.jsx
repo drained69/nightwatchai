@@ -18,6 +18,9 @@ import { Clock, Mail, Sparkles, TrendingUp, TrendingDown, ExternalLink, RefreshC
 import { hasApi, apiUrl } from './apiBase.js'
 import { getToken } from './GetAgentPages.jsx'
 
+const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA'])
+function isTokenizedStock(item) { return !CRYPTO_SYMBOLS.has(item.symbol) }
+
 async function apiJson(path, opts = {}) {
   if (!hasApi()) throw new Error('no adapter')
   const res = await fetch(apiUrl(path), opts)
@@ -92,9 +95,9 @@ export function Nightwatch02Page({ user, onAsk }) {
           <div className="nw02-eyebrow"><Sparkles size={13} /> ALPHA OF THE DAY · TOKENIZED STOCK INTELLIGENCE</div>
           <h1>Alpha of the Day</h1>
           <p className="nw02-sub">
-            A daily AI research brief on the tokenized U.S. stock universe — sectors, unusual movements, and alpha
-            candidates with a short-term and long-term thesis, risks, and invalidation conditions. Generated every
-            day at 02:00 UTC from the same live tape the Research desk uses. Crypto is out of scope.
+            Daily AI-generated research brief covering tokenized U.S. equities on Bitget.
+            Sector analysis, unusual price movements, and alpha candidates — each with a short and
+            long-term thesis, risk factors, and invalidation levels. Published at 02:00 UTC.
           </p>
         </div>
         <div className="nw02-meta">
@@ -142,9 +145,9 @@ export function Nightwatch02Page({ user, onAsk }) {
       {brief && (
         <>
           <MarketSummary brief={brief} />
-          <UnusualMovements items={brief.unusualMovements} />
-          <AlphaCandidates candidates={brief.alphaCandidates} onAsk={onAsk} />
-          <Disclaimer text={brief.disclaimer} />
+          <UnusualMovements items={(brief.unusualMovements || []).filter(isTokenizedStock)} />
+          <AlphaCandidates candidates={(brief.alphaCandidates || []).filter(isTokenizedStock)} onAsk={onAsk} />
+          <Disclaimer />
         </>
       )}
     </div>
@@ -185,7 +188,7 @@ function SubscriptionToggle({ user, status }) {
       })
       setSub(r)
       setNote(enabled
-        ? (r.mailerReady ? `You'll receive the brief at ${user.email} every day.` : `Preference saved — but email delivery is not configured on this server yet.`)
+        ? (r.mailerReady ? 'Daily brief enabled — you\'ll receive it at 02:00 UTC.' : 'Preference saved — email delivery is not configured on this server yet.')
         : 'Daily emails turned off.')
     } catch (e) { setNote(`Could not save: ${e.message}`) } finally { setBusy(false) }
   }
@@ -197,9 +200,9 @@ function SubscriptionToggle({ user, status }) {
         <div className="nw02-sub-title">Send me the Alpha of the Day report every day</div>
         <div className="nw02-sub-detail">
           {sub?.enabled
-            ? `Delivering to ${user.email} at 02:00 UTC. Unsubscribe anytime from the email footer or right here.`
-            : `We'll email the brief to ${user.email} once you enable it.`}
-          {!mailerReady && <span className="nw02-warn"><ShieldAlert size={11} /> Email provider not configured — the toggle records your preference but no mail will send until <code>RESEND_API_KEY</code> is set on the server.</span>}
+            ? 'Delivering to your email at 02:00 UTC. Unsubscribe anytime from the email footer or right here.'
+            : 'We\'ll send the daily brief to your registered email once you enable it.'}
+          {!mailerReady && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
         </div>
         {note && <div className="nw02-sub-note">{note}</div>}
       </div>
@@ -321,7 +324,7 @@ function CandidateCard({ candidate, onAsk }) {
         <div>
           <h4>{c.symbol} <span className="nw02-cand-name">{c.name}</span></h4>
           <div className="nw02-cand-meta">
-            {c.sector} · <span className={c.change24h >= 0 ? 'up' : 'down'}>{fmtPctRaw(c.change24h)}</span> 24h · alpha score {c.alphaScore.toFixed(2)}
+            {c.sector} · <span className={c.change24h >= 0 ? 'up' : 'down'}>{fmtPctRaw(c.change24h)}</span> 24h · score {(c.alphaScore * 100).toFixed(0)}/100
           </div>
         </div>
         {sig && (
@@ -397,10 +400,10 @@ function CandidateCard({ candidate, onAsk }) {
   )
 }
 
-function Disclaimer({ text }) {
+function Disclaimer() {
   return (
     <div className="nw02-disclaimer">
-      {text || 'Alpha of the Day is AI-generated market research, not investment advice.'}
+      All information provided here is for informational purposes only and does not constitute financial advice.
     </div>
   )
 }

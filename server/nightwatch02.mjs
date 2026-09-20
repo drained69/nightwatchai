@@ -256,7 +256,7 @@ export async function generateBrief({ newsStore, engine = new LocalNightwatchEng
     marketSummary: summarizeMarket(universe, macro),
     unusualMovements: findUnusualMovements(universe, bySymbol),
     alphaCandidates: candidates,
-    disclaimer: 'Alpha of the Day is AI-generated research on tokenized U.S. stocks, not investment advice. Prices and news carry a source timestamp; missing data is labeled. Do your own diligence before trading.',
+    disclaimer: 'All information here is not investment advice.',
   }
   const dailyFile = path.join(BRIEFS_DIR, `${brief.date}.json`)
   atomicWrite(dailyFile, brief)

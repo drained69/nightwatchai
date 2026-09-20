@@ -111,7 +111,7 @@ test('generateBrief writes latest.json + dated file with expected shape', async 
   assert.ok(Array.isArray(brief.unusualMovements))
   assert.ok(Array.isArray(brief.alphaCandidates))
   assert.ok(brief.disclaimer.includes('not investment advice'))
-  assert.match(brief.disclaimer, /Alpha of the Day/)
+  assert.equal(brief.disclaimer, 'All information here is not investment advice.')
   // Tokenized-stocks-only: no crypto anywhere in the brief.
   assert.equal(brief.marketSummary.cryptoAvgChange24h, undefined)
   assert.ok(!(brief.marketSummary.sectors || []).some(s => /crypto anchor|^crypto$/i.test(s.sector)))

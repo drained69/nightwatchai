@@ -20,6 +20,11 @@ import { getToken } from './GetAgentPages.jsx'
 
 const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA'])
 function isTokenizedStock(item) { return !CRYPTO_SYMBOLS.has(item.symbol) }
+function isStockSector(sector) {
+  const leaders = sector.leaders || []
+  return !leaders.every(s => CRYPTO_SYMBOLS.has(s))
+}
+function fmtRegime(r) { return r ? r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '—' }
 
 async function apiJson(path, opts = {}) {
   if (!hasApi()) throw new Error('no adapter')
@@ -228,14 +233,14 @@ function MarketSummary({ brief }) {
         <StatTile label="Stocks avg 24h" value={fmtPctRaw(ms.equityAvgChange24h)} tone={ms.equityAvgChange24h >= 0 ? 'up' : 'down'} />
         <StatTile label="Breadth" value={fmtNum(ms.breadth)} tone={ms.breadth >= 0 ? 'up' : 'down'} />
         <StatTile label="Winners / Losers" value={`${ms.winners} / ${ms.losers}`} />
-        <StatTile label="Risk regime" value={macro.riskRegime || '—'} />
+        <StatTile label="Risk regime" value={fmtRegime(macro.riskRegime)} />
         <StatTile label="DXY · VIX" value={`${fmtNum(macro.dxy)} · ${fmtNum(macro.vix, 1)}`} />
       </div>
       {ms.sectors?.length > 0 && (
         <div className="nw02-sectors">
           <div className="nw02-label">Sectors · 24h average</div>
           <div className="nw02-sector-grid">
-            {ms.sectors.slice(0, 8).map(s => (
+            {ms.sectors.filter(isStockSector).slice(0, 8).map(s => (
               <div className={`nw02-sector-row ${s.avgChange24h >= 0 ? 'up' : 'down'}`} key={s.sector}>
                 <span className="nw02-sector-name">{s.sector}</span>
                 <span className="nw02-sector-move">{fmtPctRaw(s.avgChange24h)}</span>

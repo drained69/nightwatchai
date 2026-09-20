@@ -1391,7 +1391,7 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 /* Panel + summary grid */
 .nw02-panel { margin: 20px 0 }
 .nw02-summary-grid {
-  display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
   background: var(--line-soft); border-top: 1px solid var(--line-soft);
 }
 .nw02-tile { padding: 14px 16px; background: var(--panel); display: flex; flex-direction: column; gap: 4px }

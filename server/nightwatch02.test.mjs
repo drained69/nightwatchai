@@ -218,6 +218,18 @@ test('renderBriefEmailHtml renders structured thesis objects without [object Obj
   assert.match(text, /NVDA follow-through likely/)
 })
 
+/* -------------------------------------------------- thesis card routing */
+
+test('thesisCardQuestion routes to research intent, not thesis-test', async () => {
+  const { classifyIntent } = await import('../src/domain.js')
+  const brief = await nw02.generateBrief({ newsStore: mockNewsStore(), now: new Date(Date.UTC(2030, 5, 20)), maxCandidates: 5 })
+  for (const c of brief.alphaCandidates) {
+    assert.ok(c.thesisCardQuestion, `${c.symbol} must have a thesisCardQuestion`)
+    const { intent } = classifyIntent(c.thesisCardQuestion)
+    assert.equal(intent, 'research', `${c.symbol} thesisCardQuestion should route to research, got ${intent}: "${c.thesisCardQuestion}"`)
+  }
+})
+
 test('renderBriefEmailHtml escapes HTML entities from external strings', () => {
   const brief = {
     id: 'nw02-2030-06-18', date: '2030-06-18',

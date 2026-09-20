@@ -128,6 +128,16 @@ export function Nightwatch02Page({ user, onAsk }) {
 
       {loading && <div className="empty-report">Loading today's brief…</div>}
       {err && !brief && <div className="empty-report"><b>Could not load brief</b><p>{err}</p></div>}
+      {!loading && !err && !brief && (
+        <div className="empty-report" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <Sparkles size={28} style={{ marginBottom: 12, opacity: 0.4 }} />
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 15 }}>No brief yet</p>
+          <p style={{ margin: 0, color: 'var(--text-2)', fontSize: 13 }}>
+            The first Alpha of the Day brief will be generated at 02:00 UTC.{' '}
+            {user ? 'Hit "Run now" above to generate one right away.' : 'Sign in to trigger a manual run.'}
+          </p>
+        </div>
+      )}
 
       {brief && (
         <>
@@ -379,7 +389,7 @@ function CandidateCard({ candidate, onAsk }) {
       )}
       <div className="nw02-cand-actions">
         <button className="btn primary sm" onClick={() => onAsk?.(c.thesisCardQuestion)}>
-          Open Thesis Card
+          Research this stock
         </button>
         <span className="nw02-cand-source">{c.report?.dataFreshness || 'live tape'}</span>
       </div>

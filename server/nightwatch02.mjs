@@ -197,7 +197,7 @@ async function buildCandidateCard(engine, row, ctx) {
       steelman: thesis.steelman, counter: thesis.counter,
       stressTests: thesis.stressTests,
     } : null,
-    thesisCardQuestion: `Alpha of the Day flagged ${row.symbol} (${sectorOf(row)}) — what is the current thesis and what would invalidate it?`,
+    thesisCardQuestion: `Research ${row.symbol} — Alpha of the Day flagged this ${sectorOf(row)} stock. Generate a full thesis card.`,
   }
 }
 

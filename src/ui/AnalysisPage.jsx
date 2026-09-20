@@ -4,7 +4,7 @@
  * Consumes GET /analysis/{SYMBOL} which bundles: Bitget spot ticker, technical
  * indicators computed from real Bitget 1h candles, Bitget spot book depth,
  * cross-venue positioning (funding/OI where applicable), symbol-filtered news,
- * a macro snapshot, and a Qwen-authored 4-part desk analysis with a concrete
+ * a macro snapshot, and an AI-authored 4-part desk analysis with a concrete
  * LONG/SHORT/SIT_OUT verdict + entry/stop/target + invalidation.
  *
  * Defaults to US equities (NVDA/TSLA/AAPL/MSFT/AMZN/GOOGL/META/AMD/COIN/MSTR)
@@ -102,7 +102,7 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
         <div>
           <span className="eyebrow"><BrainCircuit size={12} /> ANALYSIS WORKBENCH · SINGLE-SYMBOL DEEP DIVE</span>
           <h2>Research one name, all the way through.</h2>
-          <p className="lead">Real Bitget prices, book depth, indicators, cross-venue positioning, symbol-tagged news — and a Qwen-authored desk analysis with a concrete verdict, entry/stop/target and invalidation level.</p>
+          <p className="lead">Real Bitget prices, book depth, indicators, cross-venue positioning and symbol-tagged news — synthesized into a complete desk analysis with a concrete verdict, entry, stop, target and invalidation level.</p>
         </div>
         <div className="row-actions">
           <button className="btn ghost sm" onClick={() => load(symbol)} disabled={loading}>
@@ -159,14 +159,14 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
           </div>
         </div>
       ) : loading ? (
-        <div className="empty-report"><div className="empty-icon"><BrainCircuit size={22} className="spin" /></div><b>Fetching real Bitget tape for {symbol}…</b><p>Pulling ticker, 200 candles, book depth, cross-venue positioning, related news, and asking Qwen to synthesize a desk verdict.</p></div>
+        <div className="empty-report"><div className="empty-icon"><BrainCircuit size={22} className="spin" /></div><b>Fetching real Bitget tape for {symbol}…</b><p>Pulling ticker, 200 candles, book depth, cross-venue positioning and related news, then synthesizing the desk verdict.</p></div>
       ) : null}
 
       {syn ? (
         <article className="panel synthesis-card">
           <div className="panel-head">
             <div>
-              <span className="eyebrow"><BrainCircuit size={11} /> AI SYNTHESIS · {data?.engine || 'LOCAL'} · GROUNDED ON REAL FACTS</span>
+              <span className="eyebrow"><BrainCircuit size={11} /> AI SYNTHESIS · GROUNDED ON REAL FACTS</span>
               <h3 style={{ marginTop: 4 }}>{syn.headline}</h3>
             </div>
             <div className="row-actions">

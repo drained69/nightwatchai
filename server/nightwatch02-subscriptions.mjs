@@ -1,5 +1,5 @@
 /**
- * NIGHTWATCH 02:00 email subscriptions.
+ * Alpha of the Day email subscriptions.
  *
  * Layout on disk: <DATA_DIR>/nightwatch02/subscribers.json
  *   { "<lower-email>": { email, enabled, userId?, source, createdAt, updatedAt } }

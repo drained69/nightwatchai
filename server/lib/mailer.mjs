@@ -1,7 +1,7 @@
 /**
  * Provider-agnostic transactional email adapter.
  *
- * The rest of the codebase (auth codes, NIGHTWATCH 02:00 briefs, future
+ * The rest of the codebase (auth codes, Alpha of the Day briefs, future
  * transactional flows) SHOULD go through this module instead of talking to
  * Resend directly, so we can swap providers without hunting for call sites.
  *

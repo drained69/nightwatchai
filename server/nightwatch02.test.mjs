@@ -1,5 +1,5 @@
 /**
- * NIGHTWATCH 02:00 test suite.
+ * Alpha of the Day test suite.
  *
  * Covers:
  *   - scheduler math: nextFireAt + shouldCatchUp
@@ -92,6 +92,16 @@ function mockNewsStore() {
   ] }
 }
 
+test('scopeToTokenizedStocks keeps equities and drops every crypto row', async () => {
+  const { DEMO_UNIVERSE } = await import('../src/domain.js')
+  const scoped = nw02.scopeToTokenizedStocks(DEMO_UNIVERSE)
+  assert.ok(scoped.length > 0)
+  assert.ok(scoped.every(r => r.class !== 'crypto'))
+  assert.ok(!scoped.some(r => ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA'].includes(r.symbol)))
+  assert.ok(scoped.some(r => r.symbol === 'NVDA'))
+  assert.deepEqual(nw02.scopeToTokenizedStocks(null), [])
+})
+
 test('generateBrief writes latest.json + dated file with expected shape', async () => {
   const now = new Date(Date.UTC(2030, 5, 15, 2, 5, 0))
   const brief = await nw02.generateBrief({ newsStore: mockNewsStore(), now, maxCandidates: 3 })
@@ -101,6 +111,12 @@ test('generateBrief writes latest.json + dated file with expected shape', async 
   assert.ok(Array.isArray(brief.unusualMovements))
   assert.ok(Array.isArray(brief.alphaCandidates))
   assert.ok(brief.disclaimer.includes('not investment advice'))
+  assert.match(brief.disclaimer, /Alpha of the Day/)
+  // Tokenized-stocks-only: no crypto anywhere in the brief.
+  assert.equal(brief.marketSummary.cryptoAvgChange24h, undefined)
+  assert.ok(!(brief.marketSummary.sectors || []).some(s => /crypto anchor|^crypto$/i.test(s.sector)))
+  assert.ok(!brief.alphaCandidates.some(c => c.symbol === 'BTC'))
+  assert.ok(!brief.unusualMovements.some(u => u.symbol === 'BTC'))
   // Persistence round-trip
   const loaded = nw02.loadLatestBrief()
   assert.equal(loaded.id, brief.id)
@@ -153,7 +169,7 @@ test('listActiveSubscribers excludes opted-out rows', () => {
 test('renderBriefEmailHtml embeds date, disclaimer, and unsubscribe link', async () => {
   const brief = await nw02.generateBrief({ newsStore: mockNewsStore(), now: new Date(Date.UTC(2030, 5, 16)), maxCandidates: 2 })
   const html = nw02.renderBriefEmailHtml(brief, { email: 'eve@x.co', unsubscribeToken: 'tok_abc' })
-  assert.match(html, /NIGHTWATCH 02:00/)
+  assert.match(html, /Alpha of the Day/)
   assert.match(html, /2030-06-16/)
   assert.match(html, /not investment advice/)
   assert.match(html, /unsubscribe\/tok_abc/)
@@ -162,7 +178,7 @@ test('renderBriefEmailHtml embeds date, disclaimer, and unsubscribe link', async
 test('renderBriefEmailText is plain, contains date and disclaimer', async () => {
   const brief = await nw02.generateBrief({ newsStore: mockNewsStore(), now: new Date(Date.UTC(2030, 5, 17)), maxCandidates: 2 })
   const text = nw02.renderBriefEmailText(brief)
-  assert.match(text, /^NIGHTWATCH 02:00 — 2030-06-17/)
+  assert.match(text, /^Alpha of the Day — 2030-06-17/)
   assert.match(text, /not investment advice/)
   // No HTML tags in the text version
   assert.ok(!/<[a-z][^>]*>/i.test(text))

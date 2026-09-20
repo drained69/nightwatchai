@@ -118,7 +118,7 @@ if (NEWS_ENABLED) news.start()
 SignalHistory.startEvaluator()
 // Alerts evaluator
 Alerts.startEvaluator({ sendPush: sendUserPush })
-// NIGHTWATCH 02:00 daily brief scheduler (02:00 UTC by default). The scheduler
+// Alpha of the Day daily brief scheduler (02:00 UTC by default). The scheduler
 // runs in-process, is timezone-aware, and catches up on boot if today's brief
 // window has already passed and no brief file exists yet.
 const nw02 = makeScheduler({ newsStore: news, engine })
@@ -211,6 +211,10 @@ function cors(res) {
   res.setHeader('Access-Control-Expose-Headers', 'X-RateLimit-Remaining, X-RateLimit-Reset')
 }
 function json(res, status, body) { cors(res); res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+/** Minimal HTML escape for the tiny confirmation pages we render inline. */
+function escapeHtmlLite(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
 async function readJson(req, limitBytes = 512 * 1024) {
   const chunks = []
   let size = 0
@@ -917,7 +921,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true })
     }
 
-    // NIGHTWATCH 02:00 — daily brief + subscriptions
+    // Alpha of the Day — daily tokenized-stock brief + subscriptions
     if (route === 'GET /nightwatch/latest') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
       const brief = loadLatestBrief()
@@ -970,11 +974,11 @@ const server = http.createServer(async (req, res) => {
       const sub = findByUnsubscribeToken(token)
       cors(res); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       if (!sub) {
-        res.end('<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribe link expired</h1><p>Please toggle "Daily email" off from the NIGHTWATCH 02:00 page in the app.</p></body></html>')
+        res.end('<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribe link expired</h1><p>Please toggle "Daily email" off from the Alpha of the Day page in the app.</p></body></html>')
         return
       }
       setSubscription({ email: sub.email, enabled: false, userId: sub.userId, source: 'email-unsubscribe' })
-      res.end(`<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribed</h1><p><b>${sub.email}</b> will no longer receive the daily 02:00 UTC brief. You can turn it back on any time from the NIGHTWATCH 02:00 page.</p></body></html>`)
+      res.end(`<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribed</h1><p><b>${escapeHtmlLite(sub.email)}</b> will no longer receive the daily Alpha of the Day brief (02:00 UTC). You can turn it back on any time from the Alpha of the Day page.</p></body></html>`)
       return
     }
     // Admin/dev trigger. In production, require ADMIN_TOKEN header; in dev,

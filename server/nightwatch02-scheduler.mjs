@@ -1,5 +1,5 @@
 /**
- * NIGHTWATCH 02:00 daily scheduler.
+ * Alpha of the Day daily scheduler.
  *
  * In-process, timezone-aware (default 02:00 UTC), with catch-up:
  *   1. On start, if today's brief file is missing AND today's fire time has
@@ -61,14 +61,14 @@ class Scheduler {
     const cfg = config()
     this.enabled = cfg.enabled
     if (!cfg.enabled) {
-      logger.info('NIGHTWATCH 02:00 scheduler disabled (NIGHTWATCH_02_ENABLED=0)')
+      logger.info('Alpha of the Day scheduler disabled (NIGHTWATCH_02_ENABLED=0)')
       return
     }
     this.hour = cfg.hour; this.minute = cfg.minute
     // Catch-up: if we boot after today's 02:00 and there's no brief for today,
     // generate one now so users landing on the page see today's brief.
     if (shouldCatchUp(new Date(), this.hour, this.minute)) {
-      logger.info({ date: briefDateKey() }, 'NIGHTWATCH 02:00 catch-up: brief missing for today, generating now')
+      logger.info({ date: briefDateKey() }, 'Alpha of the Day catch-up: brief missing for today, generating now')
       this._runOnce().catch(err => logger.error({ err: err.message }, 'catch-up failed'))
     }
     this._schedule()
@@ -78,7 +78,7 @@ class Scheduler {
     const now = new Date()
     this.nextAt = nextFireAt(now, this.hour, this.minute)
     const delay = Math.min(MAX_TIMEOUT_MS, this.nextAt.getTime() - now.getTime())
-    logger.info({ at: this.nextAt.toISOString(), delayMs: delay }, 'NIGHTWATCH 02:00 next fire scheduled')
+    logger.info({ at: this.nextAt.toISOString(), delayMs: delay }, 'Alpha of the Day next fire scheduled')
     this.timer = setTimeout(() => this._tick(), delay)
     this.timer.unref?.()
   }
@@ -97,7 +97,7 @@ class Scheduler {
       this.lastRun = { at: new Date().toISOString(), briefId: brief.id, delivered: email.delivered, failed: email.failed, ms: Date.now() - started }
       return this.lastRun
     } catch (err) {
-      logger.error({ err: err.message }, 'NIGHTWATCH 02:00 daily pipeline threw')
+      logger.error({ err: err.message }, 'Alpha of the Day daily pipeline threw')
       this.lastRun = { at: new Date().toISOString(), error: err.message }
       return this.lastRun
     } finally {

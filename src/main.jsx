@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
   CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
-  LineChart, LogOut, MessageCircle, Menu, MoonStar, Newspaper, PieChart, Play, Radio, ScanLine,
+  LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
 import './styles.css'
@@ -45,24 +45,31 @@ import {
 } from './domain'
 
 const NAV = [
-  { id: 'nightwatch02',label: 'NIGHTWATCH 02:00', icon: MoonStar },
-  { id: 'research',    label: 'Research',    icon: BrainCircuit },
-  { id: 'analysis',    label: 'Analysis',    icon: Crosshair },
-  { id: 'assayer',     label: 'The Assayer', icon: MessageCircle },
-  { id: 'news',        label: 'News',        icon: Newspaper },
-  { id: 'markets',     label: 'Markets',     icon: ScanLine },
-  { id: 'signals',     label: 'Signals',     icon: Radio },
-  { id: 'thesis',      label: 'Thesis Lab',  icon: TerminalSquare },
-  { id: 'portfolio',   label: 'Portfolio',   icon: Wallet },
-  { id: 'backtest',    label: 'Backtest',    icon: BarChart3 },
-  { id: 'history',     label: 'History',     icon: BookOpen },
-  { id: 'settings',    label: 'Settings',    icon: Settings },
+  { id: 'research',     label: 'Research',         icon: BrainCircuit },
+  { id: 'analysis',     label: 'Analysis',         icon: Crosshair },
+  { id: 'nightwatch02', label: 'Alpha of the Day', icon: Sparkles },
+  { id: 'markets',      label: 'Markets',          icon: ScanLine },
+  { id: 'news',         label: 'News',             icon: Newspaper },
+  { id: 'signals',      label: 'Signals',          icon: Radio },
+  { id: 'assayer',      label: 'The Assayer',      icon: MessageCircle },
+  { id: 'thesis',       label: 'Thesis Lab',       icon: TerminalSquare },
+  { id: 'portfolio',    label: 'Portfolio',        icon: Wallet },
+  { id: 'backtest',     label: 'Backtest',         icon: BarChart3 },
+  { id: 'history',      label: 'History',          icon: BookOpen },
+  { id: 'settings',     label: 'Settings',         icon: Settings },
 ]
 
 /* --------------------------------------------------------- App shell */
 
+/** Email links use /#nightwatch02 etc. — deep-link straight to that page. */
+function initialPage() {
+  if (typeof window === 'undefined') return 'research'
+  const h = (window.location.hash || '').replace(/^#\/?/, '')
+  return NAV.some(n => n.id === h) ? h : 'research'
+}
+
 function App({ authUser: signedInUser, onSignedOut }) {
-  const [page, setPage] = useState('research')
+  const [page, setPage] = useState(initialPage)
   // IMPORTANT: session state is user-scoped in localStorage. The parent AuthGate
   // remounts <App> with a fresh key whenever the user changes, so we compute
   // the initial session against *this* user's id — never the shared slot.

@@ -1,5 +1,5 @@
 /**
- * NIGHTWATCH 02:00 — the daily AI market intelligence page.
+ * Alpha of the Day — the daily AI market intelligence page (tokenized U.S. stocks only).
  *
  * Structure mirrors the certificate/prospectus theme used elsewhere:
  *   1. Header block: date, generated-at, coverage stats, next-run.
@@ -14,7 +14,7 @@
  * and by the /nightwatch/run admin endpoint. Client just renders.
  */
 import React, { useEffect, useState } from 'react'
-import { Clock, Mail, MoonStar, TrendingUp, TrendingDown, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Clock, Mail, Sparkles, TrendingUp, TrendingDown, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react'
 import { hasApi, apiUrl } from './apiBase.js'
 import { getToken } from './GetAgentPages.jsx'
 
@@ -89,12 +89,12 @@ export function Nightwatch02Page({ user, onAsk }) {
     <div className="page nw02-page">
       <header className="nw02-header">
         <div className="nw02-title">
-          <div className="nw02-eyebrow"><MoonStar size={13} /> NIGHTWATCH 02:00 · DAILY MARKET INTELLIGENCE</div>
-          <h1>The 02:00 UTC Brief</h1>
+          <div className="nw02-eyebrow"><Sparkles size={13} /> ALPHA OF THE DAY · TOKENIZED STOCK INTELLIGENCE</div>
+          <h1>Alpha of the Day</h1>
           <p className="nw02-sub">
-            An AI market intelligence report — sectors, unusual movements, alpha candidates with a short-term
-            and long-term thesis, risks, and invalidation conditions. Generated every day at 02:00 UTC from the
-            same live tape the Research desk uses.
+            A daily AI research brief on the tokenized U.S. stock universe — sectors, unusual movements, and alpha
+            candidates with a short-term and long-term thesis, risks, and invalidation conditions. Generated every
+            day at 02:00 UTC from the same live tape the Research desk uses. Crypto is out of scope.
           </p>
         </div>
         <div className="nw02-meta">
@@ -126,7 +126,7 @@ export function Nightwatch02Page({ user, onAsk }) {
 
       <SubscriptionToggle user={user} status={status} />
 
-      {loading && <div className="empty-report">Loading tonight's brief…</div>}
+      {loading && <div className="empty-report">Loading today's brief…</div>}
       {err && !brief && <div className="empty-report"><b>Could not load brief</b><p>{err}</p></div>}
 
       {brief && (
@@ -160,7 +160,7 @@ function SubscriptionToggle({ user, status }) {
     return (
       <div className="nw02-subscribe locked">
         <Mail size={14} />
-        <span>Sign in to receive the NIGHTWATCH 02:00 report by email every day.</span>
+        <span>Sign in to receive the Alpha of the Day report by email every day.</span>
       </div>
     )
   }
@@ -184,7 +184,7 @@ function SubscriptionToggle({ user, status }) {
     <div className={`nw02-subscribe ${sub?.enabled ? 'on' : 'off'}`}>
       <Mail size={14} />
       <div className="nw02-sub-body">
-        <div className="nw02-sub-title">Send me the NIGHTWATCH 02:00 report every day</div>
+        <div className="nw02-sub-title">Send me the Alpha of the Day report every day</div>
         <div className="nw02-sub-detail">
           {sub?.enabled
             ? `Delivering to ${user.email} at 02:00 UTC. Unsubscribe anytime from the email footer or right here.`
@@ -212,8 +212,7 @@ function MarketSummary({ brief }) {
         <small>{brief.date} · generated {fmtRelative(brief.generatedAt)}</small>
       </div>
       <div className="nw02-summary-grid">
-        <StatTile label="Equities avg 24h" value={fmtPctRaw(ms.equityAvgChange24h)} tone={ms.equityAvgChange24h >= 0 ? 'up' : 'down'} />
-        <StatTile label="Crypto avg 24h" value={fmtPctRaw(ms.cryptoAvgChange24h)} tone={ms.cryptoAvgChange24h >= 0 ? 'up' : 'down'} />
+        <StatTile label="Stocks avg 24h" value={fmtPctRaw(ms.equityAvgChange24h)} tone={ms.equityAvgChange24h >= 0 ? 'up' : 'down'} />
         <StatTile label="Breadth" value={fmtNum(ms.breadth)} tone={ms.breadth >= 0 ? 'up' : 'down'} />
         <StatTile label="Winners / Losers" value={`${ms.winners} / ${ms.losers}`} />
         <StatTile label="Risk regime" value={macro.riskRegime || '—'} />
@@ -280,7 +279,7 @@ function AlphaCandidates({ candidates, onAsk }) {
     return (
       <section className="panel nw02-panel">
         <div className="panel-head"><h3>Alpha candidates</h3><small>none qualified today</small></div>
-        <div className="empty-body">No candidates cleared the 02:00 UTC scan today. The next brief runs at 02:00 UTC tomorrow.</div>
+        <div className="empty-body">No tokenized stock cleared today's alpha scan. The next brief runs at 02:00 UTC tomorrow.</div>
       </section>
     )
   }
@@ -391,7 +390,7 @@ function CandidateCard({ candidate, onAsk }) {
 function Disclaimer({ text }) {
   return (
     <div className="nw02-disclaimer">
-      {text || 'NIGHTWATCH 02:00 is AI-generated market research, not investment advice.'}
+      {text || 'Alpha of the Day is AI-generated market research, not investment advice.'}
     </div>
   )
 }

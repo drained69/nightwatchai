@@ -1,8 +1,9 @@
 /**
- * NIGHTWATCH 02:00 — daily AI market intelligence brief.
+ * Alpha of the Day — daily AI market intelligence brief (tokenized stocks only).
  *
  * Every day at 02:00 UTC we:
- *   1. Pull the live tokenized-equity + crypto-anchor universe (buildLiveUniverse).
+ *   1. Pull the live universe (buildLiveUniverse) and scope it to tokenized
+ *      equities — crypto is explicitly out of scope for this brief.
  *   2. Grade every asset on composite/net-edge/volume/news attention.
  *   3. Pick the top N alpha candidates.
  *   4. Run the same `LocalNightwatchEngine.research` pipeline that powers the
@@ -68,20 +69,25 @@ const SECTOR_OF = {
   TSLA: 'Auto / EV', AAPL: 'Consumer Tech', MSFT: 'Cloud / AI',
   META: 'Digital Ads', GOOGL: 'Digital Ads', AMZN: 'E-commerce / Cloud',
   MSTR: 'Crypto-linked Equity', COIN: 'Crypto-linked Equity',
-  BTC: 'Crypto Anchor', ETH: 'Crypto Anchor', SOL: 'Crypto',
 }
 function sectorOf(row) { return SECTOR_OF[row.symbol] || row.sector || 'Other' }
+
+/**
+ * Alpha of the Day covers tokenized stocks only — filter out crypto rows.
+ * Exported for tests.
+ */
+export function scopeToTokenizedStocks(rows) {
+  return (rows || []).filter(r => r.class === 'tokenized-equity' || r.class === 'equity')
+}
 
 /* -------------------------------------------------- market summary */
 
 function summarizeMarket(rows, macro) {
-  const equities = rows.filter(r => r.class === 'equity' || r.class === 'tokenized-equity' || SECTOR_OF[r.symbol] && r.class !== 'crypto')
-  const crypto   = rows.filter(r => r.class === 'crypto')
+  // `rows` is already scoped to tokenized stocks by generateBrief.
   const avg = arr => arr.length ? arr.reduce((a, x) => a + (x.change24h || 0), 0) / arr.length : 0
   const winners = rows.filter(r => (r.change24h ?? 0) >= 1)
   const losers  = rows.filter(r => (r.change24h ?? 0) <= -1)
 
-  // Sector-level averages (equities only — crypto is one bucket).
   const bySector = {}
   for (const r of rows) {
     const key = sectorOf(r)
@@ -94,13 +100,11 @@ function summarizeMarket(rows, macro) {
   })).sort((a, b) => Math.abs(b.avgChange24h) - Math.abs(a.avgChange24h))
 
   return {
-    equityAvgChange24h: Number(avg(equities).toFixed(2)),
-    cryptoAvgChange24h: Number(avg(crypto).toFixed(2)),
+    equityAvgChange24h: Number(avg(rows).toFixed(2)),
     winners: winners.length,
     losers: losers.length,
     breadth: rows.length ? Number(((winners.length - losers.length) / rows.length).toFixed(2)) : 0,
     macro: macro ? {
-      cryptoRegime: macro.cryptoRegime,
       riskRegime: macro.riskRegime,
       dxy: macro.dxy?.last ?? null,
       vix: macro.vix?.last ?? null,
@@ -151,7 +155,7 @@ function findUnusualMovements(rows, newsBySymbol) {
 async function buildCandidateCard(engine, row, ctx) {
   const request = {
     intent: 'research',
-    question: `NIGHTWATCH 02:00 · what changed on ${row.symbol} and is there an edge?`,
+    question: `Alpha of the Day · what changed on ${row.symbol} and is there an edge?`,
     asset: row.symbol,
     context: ctx,
   }
@@ -193,7 +197,7 @@ async function buildCandidateCard(engine, row, ctx) {
       steelman: thesis.steelman, counter: thesis.counter,
       stressTests: thesis.stressTests,
     } : null,
-    thesisCardQuestion: `NIGHTWATCH 02:00 flagged ${row.symbol} (${sectorOf(row)}) — what is the current thesis and what would invalidate it?`,
+    thesisCardQuestion: `Alpha of the Day flagged ${row.symbol} (${sectorOf(row)}) — what is the current thesis and what would invalidate it?`,
   }
 }
 
@@ -212,7 +216,10 @@ function stressTestOne(report, ctx) {
 export async function generateBrief({ newsStore, engine = new LocalNightwatchEngine(), maxCandidates = 5, now = new Date() } = {}) {
   ensureDirs()
   const started = Date.now()
-  const universe = await buildLiveUniverse().catch(err => { logger.warn({ err: err.message }, 'brief: universe fetch failed'); return [] })
+  const fullUniverse = await buildLiveUniverse().catch(err => { logger.warn({ err: err.message }, 'brief: universe fetch failed'); return [] })
+  // Alpha of the Day is a tokenized-stock brief — crypto never ranks, never
+  // appears in the summary, never becomes a candidate.
+  const universe = scopeToTokenizedStocks(fullUniverse)
   const macro = await getMacro().catch(() => null)
   const bySymbol = newsStore?._items ? newsBySymbolFromStore(newsStore) : {}
 
@@ -249,12 +256,12 @@ export async function generateBrief({ newsStore, engine = new LocalNightwatchEng
     marketSummary: summarizeMarket(universe, macro),
     unusualMovements: findUnusualMovements(universe, bySymbol),
     alphaCandidates: candidates,
-    disclaimer: 'NIGHTWATCH 02:00 is AI-generated market research, not investment advice. Prices and news carry a source timestamp; missing data is labeled. Do your own diligence before trading.',
+    disclaimer: 'Alpha of the Day is AI-generated research on tokenized U.S. stocks, not investment advice. Prices and news carry a source timestamp; missing data is labeled. Do your own diligence before trading.',
   }
   const dailyFile = path.join(BRIEFS_DIR, `${brief.date}.json`)
   atomicWrite(dailyFile, brief)
   atomicWrite(LATEST_FILE, brief)
-  logger.info({ id: brief.id, live: brief.coverage.live, candidates: candidates.length, ms: brief.generationMs }, 'NIGHTWATCH 02:00 brief published')
+  logger.info({ id: brief.id, live: brief.coverage.live, candidates: candidates.length, ms: brief.generationMs }, 'Alpha of the Day brief published')
   return brief
 }
 
@@ -335,7 +342,7 @@ export function renderBriefEmailHtml(brief, subscriber) {
   const topSectors = (ms.sectors || []).slice(0, 4).map(s =>
     `<tr><td style="padding:6px 10px;border-bottom:1px solid #24262b;font-family:'IBM Plex Mono',monospace;color:#e6e6e6">${escapeHtml(s.sector)}</td>
      <td style="padding:6px 10px;border-bottom:1px solid #24262b;text-align:right;font-family:'IBM Plex Mono',monospace;color:${s.avgChange24h >= 0 ? '#5dbf91' : '#e05b6a'}">${s.avgChange24h >= 0 ? '+' : ''}${s.avgChange24h.toFixed(2)}%</td>
-     <td style="padding:6px 10px;border-bottom:1px solid #24262b;font-family:'IBM Plex Mono',monospace;color:#9aa0a6">${(s.leaders || []).join(', ')}</td></tr>`
+      <td style="padding:6px 10px;border-bottom:1px solid #24262b;font-family:'IBM Plex Mono',monospace;color:#9aa0a6">${escapeHtml((s.leaders || []).join(', '))}</td></tr>`
   ).join('')
   const unusual = (brief.unusualMovements || []).slice(0, 5).map(u =>
     `<li style="margin:8px 0;color:#e6e6e6"><b>${escapeHtml(u.symbol)}</b> · ${escapeHtml(u.sector)} · <span style="color:${u.change24h >= 0 ? '#5dbf91' : '#e05b6a'}">${u.change24h >= 0 ? '+' : ''}${u.change24h.toFixed(2)}%</span> — <span style="color:#9aa0a6">${escapeHtml(u.drivers.join(' · '))}</span></li>`
@@ -364,8 +371,8 @@ export function renderBriefEmailHtml(brief, subscriber) {
 <!doctype html><html><body style="margin:0;padding:0;background:#0b0c0e;font-family:-apple-system,Segoe UI,sans-serif;color:#e6e6e6">
   <div style="max-width:640px;margin:0 auto;padding:32px 24px">
     <div style="border-bottom:1px solid #24262b;padding-bottom:16px;margin-bottom:24px">
-      <h1 style="font-family:'DM Serif Display',Georgia,serif;font-size:30px;margin:0 0 4px;color:#fff">NIGHTWATCH 02:00</h1>
-      <div style="color:#9aa0a6;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase">Daily Market Intelligence · ${escapeHtml(brief.date)}</div>
+      <h1 style="font-family:'DM Serif Display',Georgia,serif;font-size:30px;margin:0 0 4px;color:#fff">Alpha of the Day</h1>
+      <div style="color:#9aa0a6;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase">Daily Tokenized-Stock Intelligence · ${escapeHtml(brief.date)}</div>
     </div>
 
     <h2 style="font-family:'DM Serif Display',Georgia,serif;color:#fff;font-size:18px;margin:0 0 12px">Market summary</h2>
@@ -397,7 +404,7 @@ export function renderBriefEmailHtml(brief, subscriber) {
     </div>
 
     <div style="margin-top:24px;color:#6d7278;font-size:11px;text-align:center;line-height:1.7">
-      <a href="${link}" style="color:#9aa0a6">Open NIGHTWATCH 02:00 in the workstation</a><br>
+      <a href="${link}" style="color:#9aa0a6">Open Alpha of the Day in the workstation</a><br>
       <a href="${unsub}" style="color:#6d7278">Unsubscribe from daily briefs</a>
     </div>
   </div>
@@ -406,9 +413,9 @@ export function renderBriefEmailHtml(brief, subscriber) {
 
 export function renderBriefEmailText(brief) {
   const lines = []
-  lines.push(`NIGHTWATCH 02:00 — ${brief.date}`)
+  lines.push(`Alpha of the Day — ${brief.date}`)
   lines.push('')
-  lines.push(`Equities avg 24h: ${(brief.marketSummary?.equityAvgChange24h ?? 0).toFixed(2)}%`)
+  lines.push(`Stocks avg 24h: ${(brief.marketSummary?.equityAvgChange24h ?? 0).toFixed(2)}%`)
   lines.push(`Breadth: ${(brief.marketSummary?.breadth ?? 0).toFixed(2)}`)
   lines.push(`Coverage: ${brief.coverage?.live}/${brief.coverage?.total} live`)
   lines.push('')
@@ -447,14 +454,14 @@ export async function emailSubscribers(brief) {
     // eslint-disable-next-line no-await-in-loop
     const { results: r } = await sendBatch({
       recipients: [s.email],
-      subject: `NIGHTWATCH 02:00 · ${brief.date}`,
+      subject: `Alpha of the Day · ${brief.date}`,
       html, text,
     })
     results.push(...r)
     delivered += r.filter(x => x.delivered).length
     failed    += r.filter(x => !x.delivered).length
   }
-  logger.info({ brief: brief.id, subs: subs.length, delivered, failed }, 'nightwatch02 emails dispatched')
+  logger.info({ brief: brief.id, subs: subs.length, delivered, failed }, 'alpha-of-the-day emails dispatched')
   return { total: subs.length, delivered, failed, results }
 }
 

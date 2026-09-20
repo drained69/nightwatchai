@@ -131,7 +131,7 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 
 | Page | Purpose |
 |---|---|
-| **NIGHTWATCH 02:00** | Daily AI market intelligence brief. Sectors, unusual movements, ranked alpha candidates with short/long thesis, risks, invalidation. Auto-generated at 02:00 UTC; opt-in email delivery. |
+| **Alpha of the Day** | Daily AI brief on the tokenized U.S. stock universe (crypto out of scope). Sectors, unusual movements, ranked alpha candidates with short/long thesis, risks, invalidation. Auto-generated at 02:00 UTC; opt-in email delivery. |
 | **Research** | Natural-language terminal. Streams the 5-skill research process live and renders a structured report. |
 | **Analysis** | Single-symbol desk analysis: ticker + indicators + book + positioning + macro + news → Qwen 4-part writeup with verdict and levels. |
 | **News** | Live news tape with AI impact analysis per asset. High-relevance items trigger toast + push. |
@@ -146,13 +146,13 @@ HUMAN DECIDES  (approve · reject · sit-out · amend)
 
 ---
 
-## NIGHTWATCH 02:00 — Daily Brief
+## Alpha of the Day — Daily Brief
 
-Every day at **02:00 UTC** the server runs a full market scan and publishes an AI market intelligence brief:
+Every day at **02:00 UTC** the server scans the tokenized-stock universe and publishes an AI market intelligence brief. Crypto is explicitly out of scope — only tokenized U.S. equities (Bitget R-pairs) can become alpha candidates:
 
 ```
 02:00 UTC
- → scan live universe (Bitget spot + tokenized-equity R-pairs, macro, news store)
+ → scan live universe (Bitget tokenized-equity R-pairs, macro, news store), crypto rows filtered out
  → rank alpha candidates (24h move · volume z-score · news attention)
  → for each finalist, run the same LocalNightwatchEngine.research the
    Research tab uses → produces situation / short-term thesis / long-term
@@ -167,7 +167,7 @@ Every day at **02:00 UTC** the server runs a full market scan and publishes an A
 
 **Reliability.** The scheduler is timezone-aware, uses a single `setTimeout` (not per-minute polling), and catches up on boot: if the server was down at 02:00 UTC and today's brief file is missing, one is generated immediately.
 
-**Email opt-in.** Users toggle "Send me the NIGHTWATCH 02:00 report every day" from the page itself. The subscription is keyed to the signed-in account email — no one can subscribe a stranger. Every email includes a one-click unsubscribe link (`GET /nightwatch/unsubscribe/:token`).
+**Email opt-in.** Users toggle "Send me the Alpha of the Day report every day" from the page itself. The subscription is keyed to the signed-in account email — no one can subscribe a stranger. Every email includes a one-click unsubscribe link (`GET /nightwatch/unsubscribe/:token`).
 
 **Setup checklist:**
 
@@ -335,7 +335,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | `BITGET_MCP_URL` | Route the 5 bitget-signal skills to the Bitget MCP sidecar | Optional |
 | `BITGET_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | Bitget Agentic Account OAuth for live paper routing | Optional |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | Web Push notifications | Optional |
-| `RESEND_API_KEY` | Real transactional email — sign-in codes AND the daily NIGHTWATCH 02:00 brief. Without it, both features fall back to server-log delivery only. | Required for email |
+| `RESEND_API_KEY` | Real transactional email — sign-in codes AND the daily Alpha of the Day brief. Without it, both features fall back to server-log delivery only. | Required for email |
 | `EMAIL_FROM` | `From:` address for outbound mail. Default `NIGHTWATCH AI <onboarding@resend.dev>`. Set to a domain-verified sender in Resend for production. | Optional |
 | `APP_URL` | Absolute URL used in email links (open-in-app, unsubscribe). Default `http://localhost:8787`. | Recommended for email |
 | `NIGHTWATCH_02_HOUR` / `NIGHTWATCH_02_MINUTE` | When the daily brief fires, in UTC. Defaults to `02` / `00`. | No |
@@ -432,7 +432,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | POST | `/copilot/portfolio` | Correlation + factor + sector analysis of a book | — |
 | GET | `/copilot/correlation/:symbol` | 30-day correlation of symbol vs BTC | — |
 
-### NIGHTWATCH 02:00
+### Alpha of the Day
 
 | Method | Path | Purpose | Auth |
 |---|---|---|---|

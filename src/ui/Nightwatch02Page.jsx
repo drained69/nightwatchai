@@ -144,7 +144,7 @@ export function Nightwatch02Page({ user, onAsk }) {
           <MarketSummary brief={brief} />
           <UnusualMovements items={brief.unusualMovements} />
           <AlphaCandidates candidates={brief.alphaCandidates} onAsk={onAsk} />
-          <Disclaimer />
+          <Disclaimer text={brief.disclaimer} />
         </>
       )}
     </div>
@@ -397,10 +397,10 @@ function CandidateCard({ candidate, onAsk }) {
   )
 }
 
-function Disclaimer() {
+function Disclaimer({ text }) {
   return (
     <div className="nw02-disclaimer">
-      All information here is not investment advice.
+      {text || 'Alpha of the Day is AI-generated market research, not investment advice.'}
     </div>
   )
 }

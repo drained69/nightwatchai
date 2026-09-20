@@ -1194,24 +1194,29 @@ export function buildReview({ position, report, actualOutcome }) {
       whatWorked: [], whatFailed: [], missedRisks: [], recurringPattern: null, improvements: [],
     }
   }
-  if (closingPnlPct >= 0 && originalDirection === report.signal.direction) {
-    worked.push('Signal direction matched outcome')
+  // position.pnlPercent is already direction-adjusted (a LONG that fell and a
+  // SHORT that rose both read negative), so the sign of the realized P&L — not
+  // a direction comparison — is what tells us whether the thesis actually paid.
+  const won = closingPnlPct >= 0
+  if (won) {
+    worked.push(`Researched ${originalDirection || report.signal.direction} direction paid off (${fmtPct(closingPnlPct)})`)
     if (report.signal.confidence > 0.75) worked.push('High-confidence signal held')
     if (report.suggestion?.riskReward >= 2) worked.push('R:R ≥ 2 setup captured')
   } else {
-    failed.push('Signal direction did not match outcome')
+    failed.push(`Researched edge did not materialize — closed ${fmtPct(closingPnlPct)}`)
     for (const risk of report.risks || []) missed.push(`${risk.label}: ${risk.detail}`)
   }
   const recurring = (report.risks || []).find(r => /Slippage|Crowd|Overbought|Oversold/i.test(r.label))
   const improvements = []
   if (report.suggestion?.estimatedFriction?.totalPct > 0.02) improvements.push('Friction was > 2% — require net edge > 3% on this asset class next time.')
   if (report.risks?.some(r => r.label === 'Crowding'))       improvements.push('Skip crowded entries — wait for the retest.')
-  if (closingPnlPct < 0 && report.signal.status !== 'NO_TRADE') improvements.push('Consider tighter invalidation on this catalyst class.')
+  if (!won && report.signal.status !== 'NO_TRADE')           improvements.push('Consider tighter invalidation on this catalyst class.')
   return {
     id: shortId('rev'),
     positionId: position?.id,
     reportId: report.id,
-    summary: `${position.asset} closed at ${fmtPct(closingPnlPct)}. Thesis ${originalDirection === report.signal.direction ? 'matched' : 'diverged from'} outcome.`,
+    won,
+    summary: `${position.asset} closed at ${fmtPct(closingPnlPct)}. The researched thesis ${won ? 'played out' : 'did not play out'}.`,
     status: 'COMPLETE',
     whatWorked: worked,
     whatFailed: failed,
@@ -1220,6 +1225,55 @@ export function buildReview({ position, report, actualOutcome }) {
     improvements,
     createdAt: new Date().toISOString(),
   }
+}
+
+/**
+ * Fold a closed trade + its review back into trader memory so the desk learns
+ * from its own realized outcomes. Produces:
+ *   - a new `analog` (the trader's own trade, similarity 1.0) that future
+ *     research on the same symbol will surface alongside the seeded history
+ *   - an incremented `patterns` occurrence when the review named a recurring
+ *     pattern, so repeated mistakes get louder over time
+ * Idempotent by position id: reviewing the same position twice replaces its
+ * analog rather than stacking duplicates.
+ */
+export function foldReviewIntoMemory(memory, position, report, review) {
+  const base = memory || { preferences: {}, patterns: [], analogs: [] }
+  const pnlPct = position.pnlPercent ?? 0
+  const direction = position.direction || report?.signal?.direction || 'LONG'
+  const period = (position.closedAt || new Date().toISOString()).slice(0, 7)
+  // Realized P&L sign is authoritative (pnlPercent is already direction-adjusted).
+  const won = review?.won ?? (pnlPct >= 0)
+  const analogId = `an-${position.id}`
+  const analog = {
+    id: analogId,
+    period,
+    asset: position.asset,
+    bucket: direction === 'LONG' ? 'FOLLOW' : 'FADE',
+    setup: (report?.situation || report?.signal?.catalyst || `${direction} ${position.asset}`).slice(0, 120),
+    outcome: `${direction} ${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(1)}%${position.closeReason ? ` (${position.closeReason.replace(/_/g, ' ').toLowerCase()})` : ''}`,
+    similarity: 1.0,
+    lesson: review?.improvements?.[0] || (won ? 'Setup worked as researched — repeatable.' : 'Thesis diverged from outcome — revisit the invalidation.'),
+    source: 'realized',
+    won,
+  }
+  // Replace any prior analog for this exact position; keep the newest 24, with
+  // the trader's own realized analogs preferred over seeds when trimming.
+  const others = (base.analogs || []).filter(a => a.id !== analogId)
+  const analogs = [analog, ...others]
+    .sort((a, b) => (b.source === 'realized' ? 1 : 0) - (a.source === 'realized' ? 1 : 0))
+    .slice(0, 24)
+
+  let patterns = base.patterns || []
+  if (review?.recurringPattern) {
+    const idx = patterns.findIndex(p => p.name === review.recurringPattern || p.id === review.recurringPattern)
+    if (idx >= 0) {
+      patterns = patterns.map((p, i) => i === idx ? { ...p, occurrences: (p.occurrences || 0) + 1 } : p)
+    } else {
+      patterns = [...patterns, { id: `pat-${shortId('p')}`, name: review.recurringPattern, occurrences: 1, lesson: analog.lesson }]
+    }
+  }
+  return { ...base, analogs, patterns }
 }
 
 /* --------------------------------------------------- Find-opportunities scan */
@@ -1242,7 +1296,7 @@ export function findOpportunities(session, watchlistOnly = false, ctx = {}) {
 /* --------------------------------------------------------- Paper execution */
 
 export class PaperExecution {
-  submit({ asset, direction, notional, entry, stop, target }) {
+  submit({ asset, direction, notional, entry, stop, target, reportId = null, decisionId = null }) {
     return {
       id: shortId('pos'),
       asset,
@@ -1256,6 +1310,11 @@ export class PaperExecution {
       pnl: 0,
       pnlPercent: 0,
       environment: 'PAPER',
+      // Provenance: link the position back to the exact research report and
+      // trader decision that opened it, so post-trade review grades against
+      // the right thesis even when the same symbol was researched twice.
+      reportId,
+      decisionId,
       openedAt: new Date().toISOString(),
     }
   }
@@ -1346,6 +1405,8 @@ export function applyTraderDecision(session, report, decision) {
     entry: report.suggestion.entry,
     stop: overrides.stop ?? report.suggestion.stop,
     target: overrides.target ?? report.suggestion.target,
+    reportId: report.id,
+    decisionId: decisionRecord.id,
   })
   return addLog(
     { ...session, decisions, positions: [...(session.positions || []), position], stage: 'BOOKED', pendingPositionId: position.id },
@@ -1454,12 +1515,32 @@ export class LocalNightwatchEngine {
     const market = ctx.universe?.find(u => u.symbol === asset) || DEMO_UNIVERSE.find(u => u.symbol === asset)
     const skills = runSkillPack(asset, market, { ...ctx, news: ctx.newsBySymbol?.[asset] || ctx.news })
     const signal = synthesizeSignal(asset, market, skills, ctx.memory?.preferences)
+    // Never fabricate a directional plan when research says there is no trade.
+    // A NO_TRADE/FLAT signal has no side to size, so returning a short-shaped
+    // plan (stop above, target below) would be misinformation. Return an
+    // explicit no-trade plan the UI can render honestly instead.
+    if (signal.status === 'NO_TRADE' || signal.direction === 'FLAT') {
+      return {
+        executionPlan: {
+          status: 'NO_TRADE',
+          symbol: asset,
+          entry: Number(market.price.toFixed(2)),
+          reason: signal.reason || 'Signal did not clear the net-edge floor after friction and risk adjustment.',
+          composite: signal.composite,
+          netEdge: signal.netEdge,
+          notes: [
+            `No tradable edge on ${asset} right now — there is no position to size.`,
+            'Re-run research when a catalyst or the tape changes; NIGHTWATCH will only plan an entry when the signal clears.',
+          ],
+        },
+      }
+    }
     const invalidation = {
       price: signal.direction === 'LONG' ? Number((market.price * (1 - Math.max(0.015, market.atrPct / 100))).toFixed(2))
            : Number((market.price * (1 + Math.max(0.015, market.atrPct / 100))).toFixed(2)),
       conditions: [],
     }
-    return { executionPlan: suggestExecution({ symbol: asset, market, signal, memory: ctx.memory, invalidation }) }
+    return { executionPlan: { status: 'PLAN', symbol: asset, ...suggestExecution({ symbol: asset, market, signal, memory: ctx.memory, invalidation }) } }
   }
 
   review(request) {

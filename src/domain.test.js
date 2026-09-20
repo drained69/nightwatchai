@@ -4,7 +4,7 @@ import {
   BITGET_SIGNAL_SKILLS, DEMO_UNIVERSE, LocalNightwatchEngine, NightwatchProvider,
   PaperExecution, applyTraderDecision, buildResearchReport, buildReview,
   classifyIntent, coerceSession, findOpportunities, fmtCap, fmtPct, fmtPrice,
-  inferAsset, initialSession, migrateFromLegacy, portfolioImpact, runSkillPack,
+  foldReviewIntoMemory, inferAsset, initialSession, migrateFromLegacy, portfolioImpact, runSkillPack,
   stressTestThesis, synthesizeSignal, uncoveredAssetCandidates,
 } from './domain.js'
 
@@ -229,6 +229,55 @@ test('buildReview lists missed risks when direction diverged from outcome', () =
   assert.ok(rev.whatFailed.length + rev.missedRisks.length >= 1)
 })
 
+test('buildReview summary reflects realized P&L, not a trivial direction match', () => {
+  const report = { id: 'r-x', symbol: 'NVDA', signal: { direction: 'LONG', confidence: 0.8, status: 'SIGNAL' }, risks: [], suggestion: { riskReward: 2 } }
+  const loser = buildReview({ position: { asset: 'NVDA', direction: 'LONG', pnlPercent: -0.02, id: 'p1' }, report, actualOutcome: { pnlPct: -0.02 } })
+  assert.equal(loser.won, false)
+  assert.ok(/did not play out/.test(loser.summary), loser.summary)
+  assert.ok(loser.whatFailed.length >= 1)
+  const winner = buildReview({ position: { asset: 'NVDA', direction: 'LONG', pnlPercent: 0.03, id: 'p2' }, report, actualOutcome: { pnlPct: 0.03 } })
+  assert.equal(winner.won, true)
+  assert.ok(/played out/.test(winner.summary), winner.summary)
+  assert.ok(winner.whatWorked.length >= 1)
+})
+
+test('applyTraderDecision links the opened position back to its report + decision', () => {
+  const session = initialSession()
+  const market = DEMO_UNIVERSE.find(a => a.symbol === 'NVDA')
+  const skills = runSkillPack('NVDA', market)
+  const signal = synthesizeSignal('NVDA', market, skills)
+  const report = buildResearchReport({ question: 'x', symbol: 'NVDA', market, skills, signal: { ...signal, status: 'SIGNAL', direction: 'LONG' }, memory: session.memory })
+  report.suggestion = { notional: 1000, entry: market.price, stop: market.price * 0.98, target: market.price * 1.04, riskReward: 2 }
+  session.reports.push(report); session.activeReportId = report.id
+  const next = applyTraderDecision(session, report, { action: 'APPROVE' })
+  const pos = next.positions[0]
+  assert.equal(pos.reportId, report.id)
+  assert.equal(pos.decisionId, next.decisions[0].id)
+})
+
+test('foldReviewIntoMemory closes the self-improvement loop (realized analog, idempotent)', () => {
+  const memory = initialSession().memory
+  const report = { id: 'r-y', symbol: 'NVDA', signal: { direction: 'LONG', status: 'SIGNAL', catalyst: 'earnings beat' }, situation: 'NVDA beat + risk-on', risks: [] }
+  const position = { id: 'pos-1', asset: 'NVDA', direction: 'LONG', pnlPercent: 0.031, closeReason: 'TAKE_PROFIT', closedAt: '2026-09-20T02:00:00.000Z' }
+  const review = buildReview({ position, report, actualOutcome: { pnlPct: 0.031 } })
+  const mem2 = foldReviewIntoMemory(memory, position, report, review)
+  const mine = mem2.analogs.find(a => a.id === 'an-pos-1')
+  assert.ok(mine, 'realized analog present')
+  assert.equal(mine.source, 'realized')
+  assert.equal(mine.won, true)
+  assert.equal(mine.asset, 'NVDA')
+  assert.ok(mine.outcome.includes('take profit'))
+  // Idempotent: reviewing again replaces, does not duplicate
+  const mem3 = foldReviewIntoMemory(mem2, position, report, review)
+  assert.equal(mem3.analogs.filter(a => a.id === 'an-pos-1').length, 1)
+  // Realized analogs surface in the NEXT report on that symbol
+  const market = DEMO_UNIVERSE.find(a => a.symbol === 'NVDA')
+  const skills = runSkillPack('NVDA', market)
+  const signal = synthesizeSignal('NVDA', market, skills)
+  const rep2 = buildResearchReport({ question: 'again', symbol: 'NVDA', market, skills, signal, memory: mem3 })
+  assert.ok(rep2.analogs.some(a => a.source === 'realized'), 'next report surfaces the trader own realized analog')
+})
+
 /* ---------- LocalNightwatchEngine + provider ---------- */
 
 test('LocalNightwatchEngine.research returns a research report', async () => {
@@ -243,6 +292,26 @@ test('LocalNightwatchEngine.thesisTest returns a thesis report', async () => {
   const artifact = await engine.run({ intent: 'thesis-test', thesis: 'Long BTC into ETF flows', context: { memory: initialSession().memory } })
   assert.ok(artifact.thesisReport)
   assert.equal(artifact.thesisReport.asset, 'BTC')
+})
+
+test('executionHelp never fabricates a directional plan on a NO_TRADE signal', async () => {
+  const engine = new LocalNightwatchEngine()
+  // Sweep the universe; for any asset whose signal is NO_TRADE, the plan MUST
+  // be a no-trade plan (no stop/target), and for a tradable signal the plan
+  // must be internally coherent (stop and target on opposite sides of entry).
+  for (const asset of DEMO_UNIVERSE) {
+    const { executionPlan: plan } = await engine.run({ intent: 'execution-help', asset: asset.symbol, question: `size ${asset.symbol}`, context: { memory: initialSession().memory } })
+    if (plan.status === 'NO_TRADE') {
+      assert.equal(plan.stop, undefined, `${asset.symbol}: no-trade plan must not carry a stop`)
+      assert.equal(plan.target, undefined, `${asset.symbol}: no-trade plan must not carry a target`)
+      assert.ok(plan.reason, `${asset.symbol}: no-trade plan must explain why`)
+    } else {
+      assert.equal(plan.status, 'PLAN')
+      const longShaped = plan.stop < plan.entry && plan.target > plan.entry
+      const shortShaped = plan.stop > plan.entry && plan.target < plan.entry
+      assert.ok(longShaped || shortShaped, `${asset.symbol}: plan stop/target must bracket entry coherently (entry ${plan.entry}, stop ${plan.stop}, target ${plan.target})`)
+    }
+  }
 })
 
 test('NightwatchProvider with no endpoint uses local engine', async () => {

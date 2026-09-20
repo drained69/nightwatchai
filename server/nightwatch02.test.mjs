@@ -168,6 +168,40 @@ test('renderBriefEmailText is plain, contains date and disclaimer', async () => 
   assert.ok(!/<[a-z][^>]*>/i.test(text))
 })
 
+test('renderBriefEmailHtml renders structured thesis objects without [object Object]', () => {
+  // Candidate carrying the REAL report shape: situation is an array, and the
+  // theses are structured objects — not strings. The renderer must extract the
+  // statement, never stringify the object.
+  const brief = {
+    id: 'nw02-2030-07-01', date: '2030-07-01',
+    coverage: { total: 1, live: 1, newsItems: 0 },
+    marketSummary: { equityAvgChange24h: 1.2, breadth: 0.1, macro: { riskRegime: 'RISK_ON' }, sectors: [] },
+    unusualMovements: [],
+    alphaCandidates: [{
+      symbol: 'NVDA', name: 'NVIDIA', sector: 'Semiconductors', change24h: 2.3, alphaScore: 0.5,
+      news: [],
+      report: {
+        signal: { direction: 'LONG', confidence: 0.72, netEdge: 0.02, status: 'SIGNAL' },
+        situation: ['NVDA is trading $220 (+2.3% 24h).', 'Wire tape is bullish.'],
+        shortTermThesis: { direction: 'LONG', horizon: 'next 24-72 hours', statement: 'NVDA follow-through likely on the earnings drift.', keyDrivers: ['beat'], expectedMove: '+2%' },
+        longTermThesis: { horizon: 'next 4-12 weeks', statement: 'Structural AI capex tailwind intact.', structuralFactors: ['datacenter demand'] },
+        risks: [{ label: 'Volatility whipsaw', detail: 'ATR 4.2% — 1R stops get taken' }],
+        whatChangesThisThesis: [{ label: 'Close < EMA20', why: 'Trend structure break' }],
+        invalidation: { price: 210, conditions: ['Close < EMA20'] },
+      },
+    }],
+    disclaimer: 'not investment advice',
+  }
+  const html = nw02.renderBriefEmailHtml(brief, { unsubscribeToken: 't' })
+  assert.ok(!/\[object Object\]/.test(html), 'email must not contain [object Object]')
+  assert.match(html, /NVDA follow-through likely/)
+  assert.match(html, /Structural AI capex tailwind/)
+  assert.match(html, /Volatility whipsaw/)
+  const text = nw02.renderBriefEmailText(brief)
+  assert.ok(!/\[object Object\]/.test(text), 'text email must not contain [object Object]')
+  assert.match(text, /NVDA follow-through likely/)
+})
+
 test('renderBriefEmailHtml escapes HTML entities from external strings', () => {
   const brief = {
     id: 'nw02-2030-06-18', date: '2030-06-18',

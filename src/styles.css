@@ -1544,3 +1544,31 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 }
 .unsupported-symbols .chip.mini { padding: 4px 8px; font-size: 11px }
 .btn.xs { padding: 4px 8px; font: 500 11px 'IBM Plex Mono', monospace }
+
+/* ============================================================= realized analog (self-improvement) */
+.analog.realized { border-left: 3px solid var(--up); padding-left: 10px; background: rgba(11, 111, 71, 0.05) }
+.analog-badge {
+  display: inline-block; padding: 1px 6px; font: 700 9px 'IBM Plex Mono', monospace;
+  letter-spacing: 1px; background: var(--up); color: var(--panel); margin-right: 6px;
+}
+.analog-won  { display: inline-block; padding: 1px 6px; font: 700 9px 'IBM Plex Mono', monospace; color: var(--up);   border: 1px solid var(--up) }
+.analog-lost { display: inline-block; padding: 1px 6px; font: 700 9px 'IBM Plex Mono', monospace; color: var(--down); border: 1px solid var(--down) }
+
+/* ============================================================= execution no-trade state */
+.exec-notrade { padding: 18px 20px; border-top: 1px solid var(--line) }
+.exec-notrade-head { display: flex; align-items: center; gap: 8px; color: var(--accent-2); font: 400 16px 'DM Serif Display', Georgia, serif; margin-bottom: 8px }
+.exec-notrade p { color: var(--text-2); font-size: 13px; line-height: 1.6; margin: 6px 0 }
+.exec-notrade-metrics { display: flex; gap: 24px; margin: 14px 0; flex-wrap: wrap }
+
+/* ============================================================= desk learnings (self-improvement) */
+.learn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft); border-top: 1px solid var(--line-soft) }
+.learn-col { padding: 16px 18px; background: var(--panel) }
+.learn-label { font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px }
+.learn-pattern, .learn-analog { padding: 8px 0; border-bottom: 1px dotted var(--line-soft) }
+.learn-pattern:last-child, .learn-analog:last-child { border-bottom: 0 }
+.learn-pattern-head, .learn-analog-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text) }
+.learn-pattern-head b, .learn-analog-head b { font: 500 13px 'DM Sans', sans-serif }
+.learn-analog-head em { color: var(--muted); font-style: normal; font: 400 11px 'IBM Plex Mono', monospace; margin-left: auto }
+.learn-count { font: 700 11px 'IBM Plex Mono', monospace; color: var(--accent-2); padding: 1px 6px; border: 1px solid rgba(165,35,42,0.3) }
+.learn-pattern small, .learn-analog small { display: block; color: var(--text-2); font-size: 11px; line-height: 1.5; margin-top: 3px }
+@media (max-width: 720px) { .learn-grid { grid-template-columns: 1fr } }

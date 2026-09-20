@@ -39,7 +39,7 @@ import {
   DemoMarketData, NightwatchProvider, PaperExecution,
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
-  fmtPct, fmtPrice, ingestNewsItem, initialSession, loadSession, nowClock,
+  fmtPct, fmtPrice, foldReviewIntoMemory, ingestNewsItem, initialSession, loadSession, nowClock,
   pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
   uncoveredAssetCandidates,
 } from './domain'
@@ -427,6 +427,12 @@ function App({ authUser: signedInUser, onSignedOut }) {
     const asset = routed.asset || 'BTC'
     const response = await provider.run({ intent: 'execution-help', asset, question, context: { memory: sessionRef.current.memory } })
     const plan = response.artifact.executionPlan
+    if (plan.status === 'NO_TRADE') {
+      setSession(s => addLog(s, 'PLAN', `No trade to size · ${asset}`, plan.reason || 'Signal did not clear the net-edge floor.'))
+      setActiveArtifact({ type: 'execution', payload: { asset, plan } })
+      notify(`No tradable edge on ${asset} — nothing to size.`)
+      return
+    }
     setSession(s => addLog(s, 'PLAN', `Execution plan · ${asset}`, `entry $${fmtPrice(plan.entry)} · stop $${fmtPrice(plan.stop)} · R:R ${plan.riskReward}`))
     setActiveArtifact({ type: 'execution', payload: { asset, plan } })
     notify(`Execution plan · ${asset} · R:R ${plan.riskReward}`)
@@ -436,9 +442,20 @@ function App({ authUser: signedInUser, onSignedOut }) {
     const s = sessionRef.current
     const position = [...s.positions].reverse().find(p => p.status === 'CLOSED')
     if (!position) { notify('No closed position to review.'); return }
-    const report = s.reports.find(r => r.symbol === position.asset)
+    // Prefer the exact report that opened this position (provenance link). Fall
+    // back to a symbol match only for legacy positions booked before the link
+    // existed — grading against the wrong NVDA report would be worse than none.
+    const report = (position.reportId && s.reports.find(r => r.id === position.reportId))
+      || s.reports.find(r => r.symbol === position.asset)
     const review = buildReview({ position, report, actualOutcome: { pnlPct: position.pnlPercent } })
-    setSession(cur => addLog({ ...cur, reviews: [review, ...(cur.reviews || [])] }, 'REVIEW', `Review · ${position.asset}`, review.summary))
+    setSession(cur => {
+      const reviews = [review, ...(cur.reviews || [])]
+      // Close the self-improvement loop: fold this closed trade into memory as
+      // an analog so the NEXT research report on this symbol surfaces the
+      // trader's own realized outcome, not just the seeded history.
+      const memory = report ? foldReviewIntoMemory(cur.memory, position, report, review) : cur.memory
+      return addLog({ ...cur, reviews, memory }, 'REVIEW', `Review · ${position.asset}`, review.summary)
+    })
     setActiveArtifact({ type: 'review', payload: review })
     setPage('history')
     notify(`Review written · ${position.asset}`)
@@ -827,8 +844,8 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
         <Section title="Historical analogs" icon={<PieChart size={13} />}>
           {report.analogs.length === 0 && <p className="none">No historical analogs on file for {report.symbol}. Add one via review after a trade.</p>}
           {report.analogs.map(a => (
-            <div className="analog" key={a.id}>
-              <b>{a.id}</b>
+            <div className={a.source === 'realized' ? 'analog realized' : 'analog'} key={a.id}>
+              <b>{a.source === 'realized' ? <span className="analog-badge">YOUR TRADE</span> : a.id}{a.source === 'realized' && a.won != null && <span className={a.won ? 'analog-won' : 'analog-lost'}>{a.won ? 'WON' : 'LOST'}</span>}</b>
               <div><span>{a.setup}</span><em>{a.outcome}</em></div>
               <small>sim {(a.similarity * 100).toFixed(0)}% · {a.lesson}</small>
             </div>
@@ -1209,6 +1226,25 @@ function ImpactCard({ impact }) {
 
 function ExecutionCard({ payload }) {
   const { asset, plan } = payload
+  // Honest no-trade state: the desk found no tradable edge, so there is no
+  // entry/stop/target to render. Never show a fabricated directional plan.
+  if (plan.status === 'NO_TRADE') {
+    return (
+      <div className="panel">
+        <div className="panel-head"><h3>Execution plan · {asset}</h3><small>No trade to size</small></div>
+        <div className="exec-notrade">
+          <div className="exec-notrade-head"><AlertTriangle size={15} /> <b>No tradable edge on {asset}</b></div>
+          <p>{plan.reason}</p>
+          <div className="exec-notrade-metrics">
+            <Metric label="Last price" value={`$${fmtPrice(plan.entry)}`} />
+            <Metric label="Composite" value={plan.composite != null ? plan.composite.toFixed(3) : '—'} />
+            <Metric label="Net edge" value={plan.netEdge != null ? fmtPct(plan.netEdge) : '—'} tone={plan.netEdge >= 0 ? 'green' : 'red'} />
+          </div>
+          <p className="note">{plan.notes.join(' ')}</p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="panel">
       <div className="panel-head"><h3>Execution plan · {asset}</h3><small>Suggested by NIGHTWATCH AI · you decide</small></div>
@@ -1287,6 +1323,8 @@ function HistoryPage({ session, activeArtifact, onAsk }) {
         )}
       </div>
 
+      <DeskLearnings memory={session.memory} />
+
       <div className="panel">
         <div className="panel-head"><h3>Session activity</h3><small>{session.logs?.length || 0}</small></div>
         <div className="log-body">
@@ -1296,6 +1334,41 @@ function HistoryPage({ session, activeArtifact, onAsk }) {
               <span className={`log-type ${log.type.toLowerCase()}`}>{log.type}</span>
               <b>{log.message}</b>
               <small>{log.detail}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * "What the desk has learned" — the visible output of the self-improvement
+ * loop. Recurring patterns (with how often they've bitten) and the trader's
+ * own realized analogs, both accumulated from post-trade reviews.
+ */
+function DeskLearnings({ memory }) {
+  const patterns = (memory?.patterns || []).slice().sort((a, b) => (b.occurrences || 0) - (a.occurrences || 0))
+  const realized = (memory?.analogs || []).filter(a => a.source === 'realized')
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>What the desk has learned</h3><small>self-improvement · updated after each review</small></div>
+      <div className="learn-grid">
+        <div className="learn-col">
+          <div className="learn-label">Recurring patterns</div>
+          {patterns.length === 0 ? <p className="none">None yet.</p> : patterns.map(p => (
+            <div className="learn-pattern" key={p.id || p.name}>
+              <div className="learn-pattern-head"><b>{p.name}</b><span className="learn-count">×{p.occurrences || 1}</span></div>
+              <small>{p.lesson}</small>
+            </div>
+          ))}
+        </div>
+        <div className="learn-col">
+          <div className="learn-label">Your realized trades</div>
+          {realized.length === 0 ? <p className="none">No closed trades reviewed yet. Close a paper position, then ask "review my last trade".</p> : realized.slice(0, 6).map(a => (
+            <div className="learn-analog" key={a.id}>
+              <div className="learn-analog-head"><b>{a.asset}</b> <span className={a.won ? 'analog-won' : 'analog-lost'}>{a.won ? 'WON' : 'LOST'}</span> <em>{a.outcome}</em></div>
+              <small>{a.lesson}</small>
             </div>
           ))}
         </div>

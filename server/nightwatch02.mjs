@@ -302,6 +302,28 @@ function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
+/** situation is an array of lines; join to one paragraph. */
+function situationText(situation) {
+  if (Array.isArray(situation)) return situation.join(' ')
+  return typeof situation === 'string' ? situation : ''
+}
+/** shortTermThesis/longTermThesis are structured objects — use the statement. */
+function thesisText(thesis) {
+  if (thesis && typeof thesis === 'object') return String(thesis.statement || '')
+  return typeof thesis === 'string' ? thesis : ''
+}
+/** risks are { label, detail }; change-conditions are { label, why }. Flatten. */
+function itemText(x) {
+  if (x == null) return ''
+  if (typeof x === 'string') return x
+  if (typeof x === 'object') {
+    const head = x.label || x.name || ''
+    const tail = x.detail || x.why || ''
+    return tail ? `${head} — ${tail}` : head
+  }
+  return String(x)
+}
+
 export function renderBriefEmailHtml(brief, subscriber) {
   const base = APP_URL()
   const unsub = subscriber?.unsubscribeToken
@@ -320,7 +342,7 @@ export function renderBriefEmailHtml(brief, subscriber) {
   ).join('')
   const cards = (brief.alphaCandidates || []).slice(0, 5).map(c => {
     const sig = c.report?.signal || {}
-    const risks = (c.report?.risks || []).slice(0, 3).map(r => `<li style="margin:4px 0;color:#c5c5c5">${escapeHtml(r)}</li>`).join('')
+    const risks = (c.report?.risks || []).slice(0, 3).map(r => `<li style="margin:4px 0;color:#c5c5c5">${escapeHtml(itemText(r))}</li>`).join('')
     const inval = c.report?.invalidation
     return `
     <div style="border:1px solid #24262b;padding:20px;margin:16px 0;background:#101216">
@@ -329,9 +351,9 @@ export function renderBriefEmailHtml(brief, subscriber) {
         <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${(c.change24h ?? 0) >= 0 ? '#5dbf91' : '#e05b6a'}">${(c.change24h ?? 0) >= 0 ? '+' : ''}${(c.change24h ?? 0).toFixed(2)}% 24h</span>
       </div>
       <div style="color:#9aa0a6;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:1px;margin:4px 0 14px">${escapeHtml(c.sector)} · ${escapeHtml(sig.direction || 'FLAT')} · ${sig.confidence != null ? (sig.confidence * 100).toFixed(0) + '% conf' : ''} · ${escapeHtml(c.liveSource)}</div>
-      ${c.report?.situation ? `<p style="color:#e6e6e6;line-height:1.6;margin:0 0 12px">${escapeHtml(c.report.situation)}</p>` : ''}
-      ${c.report?.shortTermThesis ? `<p style="color:#c5c5c5;margin:8px 0;font-size:14px"><b style="color:#fff">Short term:</b> ${escapeHtml(c.report.shortTermThesis)}</p>` : ''}
-      ${c.report?.longTermThesis ? `<p style="color:#c5c5c5;margin:8px 0;font-size:14px"><b style="color:#fff">Long term:</b> ${escapeHtml(c.report.longTermThesis)}</p>` : ''}
+      ${situationText(c.report?.situation) ? `<p style="color:#e6e6e6;line-height:1.6;margin:0 0 12px">${escapeHtml(situationText(c.report.situation))}</p>` : ''}
+      ${thesisText(c.report?.shortTermThesis) ? `<p style="color:#c5c5c5;margin:8px 0;font-size:14px"><b style="color:#fff">Short term:</b> ${escapeHtml(thesisText(c.report.shortTermThesis))}</p>` : ''}
+      ${thesisText(c.report?.longTermThesis) ? `<p style="color:#c5c5c5;margin:8px 0;font-size:14px"><b style="color:#fff">Long term:</b> ${escapeHtml(thesisText(c.report.longTermThesis))}</p>` : ''}
       ${risks ? `<div style="margin-top:12px"><b style="color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:1px">Risks</b><ul style="margin:6px 0 0;padding-left:18px">${risks}</ul></div>` : ''}
       ${inval?.price ? `<div style="margin-top:12px;color:#9aa0a6;font-family:'IBM Plex Mono',monospace;font-size:12px">Invalidation ≈ $${inval.price} · ${escapeHtml((inval.conditions || []).slice(0, 2).join(' · '))}</div>` : ''}
       <a href="${link}" style="display:inline-block;margin-top:14px;padding:10px 16px;background:#5dbf91;color:#0e0f11;text-decoration:none;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:1px;text-transform:uppercase">Open Thesis Card →</a>
@@ -401,8 +423,8 @@ export function renderBriefEmailText(brief) {
   for (const c of (brief.alphaCandidates || []).slice(0, 5)) {
     const sig = c.report?.signal || {}
     lines.push(`- ${c.symbol} (${c.sector}) · ${sig.direction || 'FLAT'} · net edge ${sig.netEdge != null ? fmtPct(sig.netEdge) : '—'}`)
-    if (c.report?.shortTermThesis) lines.push(`    short: ${c.report.shortTermThesis}`)
-    if (c.report?.longTermThesis)  lines.push(`    long : ${c.report.longTermThesis}`)
+    if (thesisText(c.report?.shortTermThesis)) lines.push(`    short: ${thesisText(c.report.shortTermThesis)}`)
+    if (thesisText(c.report?.longTermThesis))  lines.push(`    long : ${thesisText(c.report.longTermThesis)}`)
   }
   lines.push('')
   lines.push(brief.disclaimer)

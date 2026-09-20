@@ -25,6 +25,19 @@ async function apiJson(path, opts = {}) {
   return res.json()
 }
 
+// Report list fields are structured objects, not strings: risks are
+// { label, detail }, change-conditions are { label, why }. Flatten to a line.
+function itemText(x) {
+  if (x == null) return ''
+  if (typeof x === 'string') return x
+  if (typeof x === 'object') {
+    const head = x.label || x.name || ''
+    const tail = x.detail || x.why || ''
+    return tail ? `${head} — ${tail}` : head
+  }
+  return String(x)
+}
+
 function fmtPct(v) { return v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%` }
 function fmtPctRaw(v) { return v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` }
 function fmtNum(v, digits = 2) { return v == null ? '—' : v.toFixed(digits) }
@@ -288,6 +301,11 @@ function CandidateCard({ candidate, onAsk }) {
   const c = candidate
   const sig = c.report?.signal
   const dirTone = sig?.direction === 'LONG' ? 'up' : sig?.direction === 'SHORT' ? 'down' : 'flat'
+  // situation is an array of lines; shortTermThesis/longTermThesis are structured
+  // objects ({ statement, keyDrivers/structuralFactors, expectedMove, horizon }).
+  const situationLines = Array.isArray(c.report?.situation) ? c.report.situation : (c.report?.situation ? [c.report.situation] : [])
+  const shortT = c.report?.shortTermThesis
+  const longT  = c.report?.longTermThesis
   return (
     <article className="nw02-candidate">
       <header className="nw02-cand-head">
@@ -305,29 +323,32 @@ function CandidateCard({ candidate, onAsk }) {
         )}
       </header>
 
-      {c.report?.situation && (
+      {situationLines.length > 0 && (
         <div className="nw02-cand-block">
           <div className="nw02-cand-label">Situation · what changed</div>
-          <p>{c.report.situation}</p>
+          {situationLines.map((line, i) => <p key={i}>{line}</p>)}
         </div>
       )}
-      {c.report?.shortTermThesis && (
+      {shortT?.statement && (
         <div className="nw02-cand-block">
-          <div className="nw02-cand-label">Short-term thesis</div>
-          <p>{c.report.shortTermThesis}</p>
+          <div className="nw02-cand-label">Short-term thesis{shortT.horizon ? ` · ${shortT.horizon}` : ''}</div>
+          <p>{shortT.statement}</p>
+          {shortT.expectedMove && <div className="nw02-cand-move">Expected move: <b>{shortT.expectedMove}</b></div>}
+          {shortT.keyDrivers?.length > 0 && <ul className="nw02-cand-list">{shortT.keyDrivers.map((d, i) => <li key={i}>{d}</li>)}</ul>}
         </div>
       )}
-      {c.report?.longTermThesis && (
+      {longT?.statement && (
         <div className="nw02-cand-block">
-          <div className="nw02-cand-label">Long-term thesis</div>
-          <p>{c.report.longTermThesis}</p>
+          <div className="nw02-cand-label">Long-term thesis{longT.horizon ? ` · ${longT.horizon}` : ''}</div>
+          <p>{longT.statement}</p>
+          {longT.structuralFactors?.length > 0 && <ul className="nw02-cand-list">{longT.structuralFactors.map((d, i) => <li key={i}>{d}</li>)}</ul>}
         </div>
       )}
       {c.report?.risks?.length > 0 && (
         <div className="nw02-cand-block">
           <div className="nw02-cand-label">Risks</div>
           <ul className="nw02-cand-list">
-            {c.report.risks.slice(0, 4).map((r, i) => <li key={i}>{r}</li>)}
+            {c.report.risks.slice(0, 4).map((r, i) => <li key={i}>{itemText(r)}</li>)}
           </ul>
         </div>
       )}
@@ -335,7 +356,7 @@ function CandidateCard({ candidate, onAsk }) {
         <div className="nw02-cand-block">
           <div className="nw02-cand-label">What would change this thesis</div>
           <ul className="nw02-cand-list">
-            {c.report.whatChangesThisThesis.slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}
+            {c.report.whatChangesThisThesis.slice(0, 3).map((r, i) => <li key={i}>{itemText(r)}</li>)}
           </ul>
         </div>
       )}

@@ -44,18 +44,24 @@ import {
   uncoveredAssetCandidates,
 } from './domain'
 
+// Order reflects the daily trader journey: discover → decide → manage → configure.
+// Research first (primary AI action); Settings last (rare config).
 const NAV = [
+  // Discover — where information becomes ideas
   { id: 'research',     label: 'Research',         icon: BrainCircuit },
-  { id: 'analysis',     label: 'Analysis',         icon: Crosshair },
   { id: 'nightwatch02', label: 'Alpha of the Day', icon: Sparkles },
-  { id: 'markets',      label: 'Markets',          icon: ScanLine },
+  { id: 'analysis',     label: 'Analysis',         icon: Crosshair },
   { id: 'news',         label: 'News',             icon: Newspaper },
   { id: 'signals',      label: 'Signals',          icon: Radio },
-  { id: 'assayer',      label: 'The Assayer',      icon: MessageCircle },
+  { id: 'markets',      label: 'Markets',          icon: ScanLine },
+  // Decide — stress-test and validate
   { id: 'thesis',       label: 'Thesis Lab',       icon: TerminalSquare },
-  { id: 'portfolio',    label: 'Portfolio',        icon: Wallet },
   { id: 'backtest',     label: 'Backtest',         icon: BarChart3 },
+  // Manage — the book, playbooks, and audit trail
+  { id: 'portfolio',    label: 'Portfolio',        icon: Wallet },
+  { id: 'assayer',      label: 'The Assayer',      icon: MessageCircle },
   { id: 'history',      label: 'History',          icon: BookOpen },
+  // Configure
   { id: 'settings',     label: 'Settings',         icon: Settings },
 ]
 

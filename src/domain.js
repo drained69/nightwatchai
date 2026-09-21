@@ -696,7 +696,31 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
   const riskAdjustment = Number(((market.volatility === 'HIGH' ? 0.012 : market.volatility === 'MED' ? 0.006 : 0.003) * p.riskMultiplier).toFixed(4))
   const netEdge = Number((expectedEdge - estimatedFriction - riskAdjustment).toFixed(4))
 
-  const noTrade = direction === 'FLAT' || netEdge < 0 || (bearish && market.class === 'crypto' && netEdge < 0.003)
+  // Trader-configurable gates. The floors default to permissive values so
+  // existing behavior is preserved when no preferences are set.
+  const minConfidence = Number.isFinite(prefs?.minConfidence) ? prefs.minConfidence : 0
+  const minNetEdge    = Number.isFinite(prefs?.minNetEdge)    ? prefs.minNetEdge    : 0
+  const failsConfidence = confidence < minConfidence
+  const failsNetEdge    = netEdge    < Math.max(minNetEdge, 0)
+  const cryptoShortFloor = bearish && market.class === 'crypto' && netEdge < 0.003
+  const noTrade = direction === 'FLAT' || failsNetEdge || failsConfidence || cryptoShortFloor
+
+  const horizonPref = (prefs?.horizon || '').toUpperCase()
+  const horizon = horizonPref === 'INTRADAY' ? 'INTRADAY'
+    : horizonPref === 'POSITION' ? 'POSITION_TREND'
+    : horizonPref === 'SWING' ? 'SWING'
+    : market.class === 'crypto' ? 'MULTI_SESSION' : 'OVERNIGHT_INTO_OPEN'
+
+  let reason
+  if (!noTrade) {
+    reason = `${direction} ${symbol}: ${bullish ? 'news, flow and macro agree' : 'downside pressure across news, tape and macro'}; net edge ${(netEdge * 100).toFixed(2)}% after ${(estimatedFriction * 100).toFixed(2)}% friction.`
+  } else if (failsConfidence) {
+    reason = `Confidence ${(confidence * 100).toFixed(0)}% is below your ${(minConfidence * 100).toFixed(0)}% floor — sit-out flagged by your Settings.`
+  } else if (failsNetEdge && minNetEdge > 0) {
+    reason = `Net edge ${(netEdge * 100).toFixed(2)}% is below your ${(minNetEdge * 100).toFixed(2)}% floor after friction — sit-out flagged by your Settings.`
+  } else {
+    reason = `Signal did not clear net-edge floor after friction and risk adjustment. ${direction === 'FLAT' ? 'Skill scores are mixed.' : ''}`
+  }
 
   return {
     direction: noTrade ? 'FLAT' : direction,
@@ -706,13 +730,11 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
     riskAdjustment,
     netEdge,
     status: noTrade ? 'NO_TRADE' : 'SIGNAL',
-    horizon: market.class === 'crypto' ? 'MULTI_SESSION' : 'OVERNIGHT_INTO_OPEN',
+    horizon,
     catalyst: news.data.catalyst,
     composite: Number(composite.toFixed(3)),
-    reason: noTrade
-      ? `Signal did not clear net-edge floor after friction and risk adjustment. ${direction === 'FLAT' ? 'Skill scores are mixed.' : ''}`
-      : `${direction} ${symbol}: ${bullish ? 'news, flow and macro agree' : 'downside pressure across news, tape and macro'}; net edge ${(netEdge * 100).toFixed(2)}% after ${(estimatedFriction * 100).toFixed(2)}% friction.`,
-    persona: { style: p.style, risk: p.risk },
+    reason,
+    persona: { style: p.style, risk: p.risk, horizon: horizonPref || 'DEFAULT', minConfidence, minNetEdge },
   }
 }
 
@@ -987,10 +1009,14 @@ function suggestExecution({ symbol, market, signal, memory, invalidation }) {
   const prefs = memory?.preferences || {}
   const nav = prefs.nav || 25000
   const notionalCap = nav * (prefs.maxPositionPct || 0.15)
-  const rDollars = Math.min(nav * 0.01, 250)                      // ~1% NAV per R
+  const rDollars = Math.min(nav * 0.01, 250)                      // ~1% risk-per-trade
   const stopPct = Math.abs(invalidation.price ? (invalidation.price - market.price) / market.price : (market.atrPct / 100))
   const notional = Math.min(notionalCap, Math.round(rDollars / Math.max(0.005, stopPct)))
-  const targetPct = Math.max(0.02, stopPct * 2)
+  // Target distance scales with the trader's declared holding horizon:
+  // intraday captures a smaller fraction of the range, position trades run 3R+.
+  const horizonPref = (prefs.horizon || '').toUpperCase()
+  const targetMultiple = horizonPref === 'INTRADAY' ? 1.5 : horizonPref === 'POSITION' ? 3.0 : 2.0
+  const targetPct = Math.max(0.02, stopPct * targetMultiple)
   const target = signal.direction === 'LONG' ? market.price * (1 + targetPct) : market.price * (1 - targetPct)
   const feesBps = market.class === 'crypto' ? 20 : 30          // round-trip taker fees, Bitget schedule
   return {
@@ -1011,7 +1037,8 @@ function suggestExecution({ symbol, market, signal, memory, invalidation }) {
     },
     horizon: signal.horizon,
     notes: [
-      `Position size sized off ${prefs.maxPositionPct ? (prefs.maxPositionPct * 100).toFixed(0) + '% NAV cap' : '15% NAV cap'} and ~1% risk-per-trade.`,
+      `Position size sized off ${prefs.maxPositionPct ? (prefs.maxPositionPct * 100).toFixed(0) + '% paper-capital cap' : '15% paper-capital cap'} and ~1% risk-per-trade.`,
+      `Target set at ${targetMultiple.toFixed(1)}× stop distance for your ${horizonPref ? horizonPref.toLowerCase() : 'swing'} horizon.`,
       'You decide. NIGHTWATCH will not fill without your explicit approve.',
     ],
   }

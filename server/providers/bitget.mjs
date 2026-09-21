@@ -125,6 +125,12 @@ export async function getTicker(symbol) {
   const key = `ticker:${pair}`
   const hit = getCached(key)
   if (hit) return hit
+  // Prefer live WS tick when available — avoids a REST round-trip.
+  try {
+    const ws = await import('./bitget-ws.mjs')
+    const wsHit = ws.getWsTicker(symbol)
+    if (wsHit) { setCached(key, wsHit); return wsHit }
+  } catch { /* WS not started; fall through to REST */ }
   const body = await fetchJson(`${BITGET_BASE}/api/v2/spot/market/tickers?symbol=${pair}`)
   const row = body?.data?.[0]
   if (!row) return getStale(key)
@@ -147,6 +153,32 @@ export async function getTicker(symbol) {
   }
   setCached(key, value)
   return value
+}
+
+/**
+ * Prefer live WS cache over REST when it has fresh coverage for at least
+ * `minCoverage` of the mapped universe. Callers get an identical shape either
+ * way, so the swap is transparent.
+ *
+ * The dynamic import is deliberate: bitget.mjs is loaded by tests and scripts
+ * that don't need the WS runtime, and going through import.meta lets us avoid
+ * a hard circular reference between bitget.mjs and bitget-ws.mjs.
+ */
+export async function getAllTickersLive({ minCoverage = 0.6 } = {}) {
+  try {
+    const ws = await import('./bitget-ws.mjs')
+    const wsRows = ws.getAllWsTickers()
+    const wsSize = Object.keys(wsRows).length
+    if (wsSize >= SYMBOL_MAP.size * minCoverage) {
+      // Refresh the stale-shelf so REST fallbacks after a WS drop still work.
+      setCached('tickers:all', wsRows)
+      return wsRows
+    }
+    // Backfill from REST for pairs the WS cache is missing.
+    const rest = await getAllTickers()
+    if (!rest) return wsSize > 0 ? wsRows : null
+    return { ...rest, ...wsRows }
+  } catch { return await getAllTickers() }
 }
 
 /** Return snapshot of every mapped symbol at once (single request). */

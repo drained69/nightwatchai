@@ -97,6 +97,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const authToken = getToken()
   const [bitgetStatus, setBitgetStatus] = useState({ connected: false, model: null, reason: 'checking…' })
   const [personalHydrated, setPersonalHydrated] = useState(false)
+  // Which upstream is feeding the tape right now: 'ws' when Bitget's public
+  // WebSocket has fresh ticks, 'rest' during cold-boot or reconnect fallback.
+  const [tapeStream, setTapeStream] = useState('rest')
 
   const sessionRef = useRef(session)
   const timers = useRef([])
@@ -255,6 +258,8 @@ function App({ authUser: signedInUser, onSignedOut }) {
         const body = await res.json()
         const tickers = body?.tickers
         if (!alive || !tickers || !Object.keys(tickers).length) return
+        if (body.stream === 'bitget-public-ws') setTapeStream('ws')
+        else setTapeStream('rest')
         setSession(prev => {
           const markets = applyLiveTickers(prev.markets, tickers)
           market.sync(markets)
@@ -262,6 +267,17 @@ function App({ authUser: signedInUser, onSignedOut }) {
         })
       } catch { /* SSE will catch up */ }
     })()
+    // Poll stream mode every 30s so a WS drop/reconnect flips the topbar badge
+    // without waiting for the next full page load.
+    const streamPoll = setInterval(async () => {
+      try {
+        const r = await fetch(apiUrl('/bitget/ws-status'), { signal: AbortSignal.timeout(3000) })
+        if (!r.ok) return
+        const s = await r.json()
+        if (!alive) return
+        setTapeStream(s.connected && s.ageMs != null && s.ageMs < 60_000 ? 'ws' : 'rest')
+      } catch { /* keep last known */ }
+    }, 30_000)
     ;(async () => {
       try {
         const res = await fetch(apiUrl('/news/live?limit=30'), { signal: AbortSignal.timeout(6000) })
@@ -285,7 +301,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
         })
       } catch { /* SSE will fill in */ }
     })()
-    return () => { alive = false }
+    return () => { alive = false; clearInterval(streamPoll) }
   }, [])
 
   // Ingest one live news item. Runs outside React state updaters (via the
@@ -611,6 +627,15 @@ function App({ authUser: signedInUser, onSignedOut }) {
             <span>NIGHTWATCH AI</span><ChevronRight size={13} /><b>{(NAV.find(n => n.id === page) || NAV[0]).label.toUpperCase()}</b>
           </div>
           <div className="topbar-right">
+            <span
+              className={tapeStream === 'ws' ? 'pill green mini' : 'pill amber mini'}
+              title={tapeStream === 'ws'
+                ? 'Bitget public WebSocket · tick-level updates'
+                : 'Bitget public REST · 10s polling (WS reconnecting)'}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10 }}
+            >
+              <Radio size={9} /> {tapeStream === 'ws' ? 'BITGET WS' : 'BITGET REST'}
+            </span>
             <span className="ticker-tape">
               {['NVDA','TSLA','AAPL','MSFT','AMD','META','MSTR','COIN','BTC'].map(sym => {
                 const m = session.markets.find(x => x.symbol === sym) || session.universe.find(x => x.symbol === sym)
@@ -1102,6 +1127,114 @@ function ThesisResult({ artifact }) {
   )
 }
 
+/* ------------------------------------------------------- Bitget copy-trading leaderboard */
+
+/**
+ * Live top-trader strip pulled straight from Bitget's own copy-trading
+ * leaderboard. Every row deep-links to that trader's Bitget profile — the
+ * user can copy-follow with one click, we just surface the ranking.
+ */
+function BitgetTopTradersStrip() {
+  const [data, setData] = useState(null)
+  const [sort, setSort] = useState('weekProfitRate')
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    if (!hasApi()) { setLoading(false); return }
+    let alive = true
+    setLoading(true); setErr(null)
+    fetch(apiUrl(`/copytrading/leaderboard?sort=${sort}&limit=5`), { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(j => { if (alive) { setData(j); setLoading(false) } })
+      .catch(e => { if (alive) { setErr(e.message); setLoading(false) } })
+    return () => { alive = false }
+  }, [sort])
+
+  if (!hasApi()) return null
+
+  const traders = data?.traders || []
+  const total = data?.total || 0
+
+  return (
+    <div className="panel">
+      <div className="panel-head" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          Bitget top copy-traders
+          <span className="pill green mini">LIVE</span>
+        </h3>
+        <small style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label htmlFor="bg-copy-sort" style={{ color: 'var(--muted)' }}>Sort:</label>
+          <select
+            id="bg-copy-sort"
+            value={sort}
+            onChange={e => setSort(e.target.value)}
+            style={{ background: 'transparent', color: 'var(--fg)', border: '1px solid var(--edge)', borderRadius: 4, padding: '2px 6px', fontSize: 12 }}
+          >
+            <option value="weekProfitRate">7D ROI</option>
+            <option value="monthProfitRate">30D ROI</option>
+            <option value="totalProfit">All-time PnL</option>
+            <option value="followCount">Followers</option>
+          </select>
+          {total > 0 && <em className="muted">of {total.toLocaleString()}</em>}
+        </small>
+      </div>
+
+      {loading && <div className="empty-body" style={{ padding: 16 }}>Loading Bitget leaderboard…</div>}
+      {!loading && err && (
+        <div className="empty-body" style={{ padding: 16 }}>
+          Bitget leaderboard unreachable. <a href="https://www.bitget.com/copy-trading/futures" target="_blank" rel="noopener noreferrer">View on Bitget →</a>
+        </div>
+      )}
+      {!loading && !err && traders.length === 0 && (
+        <div className="empty-body" style={{ padding: 16 }}>No traders returned.</div>
+      )}
+      {!loading && !err && traders.length > 0 && (
+        <div className="pos-table">
+          <div className="pos-head">
+            <span>#</span>
+            <span>Trader</span>
+            <span>ROI</span>
+            <span>30D PnL</span>
+            <span>Copier P&L</span>
+            <span>AUM</span>
+            <span>MDD</span>
+            <span>Followers</span>
+            <span></span>
+          </div>
+          {traders.map(t => (
+            <div className="pos-row" key={t.uid || t.rank}>
+              <b>{t.rank}</b>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {t.avatar && <img src={t.avatar} alt="" width={20} height={20} style={{ borderRadius: '50%', flex: '0 0 20px' }} onError={e => { e.target.style.display = 'none' }} />}
+                <b style={{ fontSize: 12 }}>{t.displayName}</b>
+                {t.grade && <em className="muted" style={{ fontSize: 10 }}>{t.grade}</em>}
+              </span>
+              <b className={t.roiPct >= 0 ? 'up' : 'down'}>{t.roiPct != null ? `${t.roiPct.toFixed(2)}%` : '—'}</b>
+              <b className={t.pnl30dUsd >= 0 ? 'up' : 'down'}>{t.pnl30dUsd != null ? fmtAbs(t.pnl30dUsd) : '—'}</b>
+              <b className={t.copierProfitUsd >= 0 ? 'up' : 'down'}>{t.copierProfitUsd != null ? fmtAbs(t.copierProfitUsd) : '—'}</b>
+              <span>{t.aumUsd != null ? `$${t.aumUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'}</span>
+              <span className="down">{t.mddPct != null ? `${t.mddPct.toFixed(1)}%` : '—'}</span>
+              <span>{t.followers}<em className="muted"> / {t.maxFollowers || '—'}</em></span>
+              <span>
+                {t.profileUrl ? (
+                  <a href={t.profileUrl} target="_blank" rel="noopener noreferrer" className="btn ghost sm" style={{ padding: '3px 8px', fontSize: 11 }}>
+                    Follow on Bitget <ExternalLink size={10} />
+                  </a>
+                ) : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--edge)' }}>
+        <em className="muted" style={{ fontSize: 11 }}>Source: bitget.com/copy-trading · updated every 15 min</em>
+        <a href="https://www.bitget.com/copy-trading/futures" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>Full leaderboard →</a>
+      </div>
+    </div>
+  )
+}
+
 /* ------------------------------------------------------- Portfolio page */
 
 function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submit }) {
@@ -1159,6 +1292,12 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
         <div><small>LOCAL OPEN</small><b>{open.length}</b></div>
         <div><small>LOCAL CLOSED</small><b>{closed.length}</b></div>
       </div>
+
+      {/* Bitget's own top copy-traders — first-party leaderboard the app pulls
+          direct from bitget.com. Ranked side-by-side with our local playbooks
+          below so the trader can compare their own allocations against the
+          people actually winning on Bitget right now. */}
+      <BitgetTopTradersStrip />
 
       {/* Single source of truth for both published + followed playbooks. The
           same panel renders inside The Assayer so a freshly-drafted strategy

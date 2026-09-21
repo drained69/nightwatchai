@@ -35,7 +35,9 @@ import { makeSseBus } from './lib/sse.mjs'
 import { makeLlm } from './lib/llm.mjs'
 import { requireAuth, devLogin, signup, login, publicUser, requestSignInCode, verifySignInCode } from './lib/auth.mjs'
 import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './lib/store.mjs'
-import { getAllTickers, getTicker, computeIndicators } from './providers/bitget.mjs'
+import { getAllTickers, getAllTickersLive, getTicker, computeIndicators } from './providers/bitget.mjs'
+import { startBitgetWs, stopBitgetWs, getWsStatus } from './providers/bitget-ws.mjs'
+import { getTopTraders as getBitgetTopTraders, SORT_FIELDS as BITGET_COPY_SORTS } from './providers/bitget-copytrading.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
 import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
 import { getEarningsFor, getUpcomingEarnings, EQUITY_UNIVERSE as EARNINGS_UNIVERSE } from './providers/earnings.mjs'
@@ -98,6 +100,11 @@ const metrics = {
 }
 
 if (NEWS_ENABLED) news.start()
+
+// Bitget public WS — live tick + top-of-book updates for the 18-asset universe.
+// Replaces the 10s REST poll whenever the socket has fresh data; REST is the
+// cold-boot and reconnect fallback.
+if (process.env.BITGET_WS_ENABLED !== '0') startBitgetWs()
 
 // History cache + auto-backtest of published Playbooks so Explore + detail views
 // has real numbers on first render. Runs in the background so boot is fast.
@@ -180,10 +187,13 @@ news.subscribe(item => {
   }
 })
 
-// Price tick loop → SSE.
+// Price tick loop → SSE. Prefer live WS cache; fall back to REST bulk-tickers
+// when the socket is disconnected or hasn't populated yet. Loop stays at
+// PRICES_TICK_MS so downstream SSE clients get a stable heartbeat even when
+// ticks are flowing over WS.
 setInterval(async () => {
   try {
-    const tickers = await getAllTickers()
+    const tickers = await getAllTickersLive()
     if (!tickers) return
     metrics.price_ticks++
     priceBus.emit({ type: 'prices', data: { at: Date.now(), tickers } })
@@ -312,7 +322,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /health') {
       return json(res, 200, {
         ok: true,
-        provider: { llm: llm.provider, model: llm.model, bitgetMcp: Boolean(BITGET_MCP_URL) },
+        provider: { llm: llm.provider, model: llm.model, bitgetMcp: Boolean(BITGET_MCP_URL), bitgetWs: getWsStatus() },
         news: { enabled: NEWS_ENABLED, seen: news._items.length, feeds: FEEDS.length },
         universe: { total: DEMO_UNIVERSE.length, ...liveUniverseStatus() },
         mailer: mailerStatus(),
@@ -345,8 +355,30 @@ const server = http.createServer(async (req, res) => {
     // Prices
     if (route === 'GET /prices/live') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
-      const tickers = await getAllTickers()
-      return json(res, 200, { at: Date.now(), tickers: tickers || {}, live: Boolean(tickers) })
+      const tickers = await getAllTickersLive()
+      const ws = getWsStatus()
+      return json(res, 200, {
+        at: Date.now(),
+        tickers: tickers || {},
+        live: Boolean(tickers),
+        stream: ws.connected ? 'bitget-public-ws' : 'bitget-public-rest',
+        ws: { connected: ws.connected, ageMs: ws.ageMs, cachedPairs: ws.cachedPairs },
+      })
+    }
+    if (route === 'GET /bitget/ws-status') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      return json(res, 200, getWsStatus())
+    }
+    // Bitget public copy-trading leaderboard — real top-trader ROI/AUM/followers
+    // straight from bitget.com/copy-trading. Cached 15 min server-side.
+    if (route === 'GET /copytrading/leaderboard') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      const sort = url.searchParams.get('sort') || 'weekProfitRate'
+      const limit = limitParam(url.searchParams.get('limit'), 20, 50)
+      const sortField = Object.keys(BITGET_COPY_SORTS).includes(sort) ? sort : 'weekProfitRate'
+      const out = await getBitgetTopTraders({ sortField, limit }).catch(() => null)
+      if (!out) return json(res, 503, { error: 'bitget copy-trading leaderboard unavailable', sortField, live: false })
+      return json(res, 200, { ...out, sortOptions: BITGET_COPY_SORTS })
     }
     if (route === 'GET /prices/stream') {
       return priceBus.subscribe(res)
@@ -1039,5 +1071,5 @@ server.listen(PORT, HOST, () => {
   }, `NIGHTWATCH AI adapter online`)
 })
 
-process.on('SIGTERM', () => { logger.info('shutting down'); news.stop(); server.close(() => process.exit(0)) })
-process.on('SIGINT',  () => { logger.info('shutting down'); news.stop(); server.close(() => process.exit(0)) })
+process.on('SIGTERM', () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); server.close(() => process.exit(0)) })
+process.on('SIGINT',  () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); server.close(() => process.exit(0)) })

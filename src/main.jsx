@@ -28,6 +28,17 @@ function applyLiveTickers(rows, tickers) {
     }
   })
 }
+/** Mask an email for display: christopherakwuba4@gmail.com → chris******4@gmail.com */
+function maskEmail(email) {
+  const raw = String(email || '')
+  const at = raw.lastIndexOf('@')
+  if (at < 0) return raw
+  const local = raw.slice(0, at)
+  const domain = raw.slice(at)
+  if (local.length <= 2) return `${local[0] || ''}******${domain}`
+  if (local.length <= 6) return `${local[0]}******${local.slice(-1)}${domain}`
+  return `${local.slice(0, 5)}******${local.slice(-1)}${domain}`
+}
 import { runBacktestSynthetic } from './backtest.js'
 import { AssayerPage, MyPlaybooksPanel, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
@@ -1878,7 +1889,7 @@ function SettingsPage({ session, setSession, onReset, user, setPage }) {
           <div className="panel-head"><h3>Account</h3><small>Signed in</small></div>
           <div className="settings-body">
             <div className="kv-row"><span>Name</span><b>{user.name || user.email?.split('@')[0] || '—'}</b></div>
-            <div className="kv-row"><span>Email</span><b>{user.email}</b></div>
+            <div className="kv-row"><span>Email</span><b>{maskEmail(user.email)}</b></div>
             <div className="kv-row"><span>Alpha of the Day email</span>
               <button className="btn ghost sm" onClick={() => setPage('nightwatch02')}>Manage subscription →</button>
             </div>

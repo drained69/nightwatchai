@@ -1015,7 +1015,7 @@ function ThesisPage({ session, activeArtifact, setCommand, submit }) {
           value={draft}
           onChange={e => setDraft(e.target.value)}
           rows={3}
-          placeholder='Example: "Long MSTR here because BTC breakout is real and MSTR premium will re-rate."'
+          placeholder='Example: "Long NVDA into the datacenter capex cycle — hyperscaler orders are re-accelerating and street numbers still lag."'
         />
         <button className="btn primary" onClick={() => { if (!draft.trim()) return; const q = `/thesis ${draft}`; setCommand(q); submit(q); setDraft('') }}>STRESS-TEST →</button>
       </div>
@@ -1133,7 +1133,7 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
   return (
     <div className="page">
       <PageHead title="Portfolio" eyebrow={<><Wallet size={12} /> PAPER BOOK · TRADER-APPROVED FILLS ONLY</>}>
-        <button className="btn primary sm" onClick={() => { const q = 'How does a $1500 long BTC affect my portfolio?'; setCommand(q); submit(q) }}>SIMULATE IMPACT</button>
+        <button className="btn primary sm" onClick={() => { const q = 'Simulate a $1500 long NVDA position and show the portfolio-level impact.'; setCommand(q); submit(q) }}>SIMULATE IMPACT</button>
       </PageHead>
 
       {paper && (
@@ -2064,7 +2064,7 @@ function AuthGate() {
           </div>
           <div className="auth-target">Built for event-driven traders in tokenized U.S. stocks</div>
           <h1>Your AI trading desk.</h1>
-          <p className="auth-tagline">Tokenized U.S. equities on Bitget — NVDA, TSLA, AAPL, MSFT, META, AMD, COIN, MSTR — plus a crypto correlation set. Research the news, not just the chart.</p>
+          <p className="auth-tagline">Tokenized U.S. equities on Bitget — NVDA, TSLA, AAPL, MSFT, META, AMD, COIN, MSTR. Research the news, not just the chart.</p>
           <p className="auth-lead">Ask a market question in plain English. NIGHTWATCH consolidates live Bitget R-pair prices for tokenized U.S. stocks, cross-venue funding, order-book depth, macro context and symbol-tagged news, then produces a structured research report with a clear verdict, entry, stop and target. You decide whether to trade.</p>
           <ul className="auth-perks">
             <li><ShieldCheck size={14} /> <span><b>A research workspace that remembers.</b> Watchlist, reports, theses and paper positions are tied to your account and follow you across every device.</span></li>

@@ -1,23 +1,30 @@
 /**
- * Bitget Agent Account trading.
+ * Bitget Agentic Account routing.
+ *
+ * Backs the Agent Hub OAuth flow: the operator authorizes their Agentic
+ * Account (a dedicated agent-only sub-account isolated from their main funds
+ * and capped by Agent Hub daily limits), then approved research reports can
+ * be routed there as real orders — one at a time, each with explicit
+ * per-order confirm.
  *
  * OAuth flow:
- *   1. SPA → /auth/oauth/bitget/start → redirect to Bitget authorize URL
- *   2. Bitget → REDIRECT_URI with ?code=... → SPA → /auth/oauth/bitget/callback
- *   3. Server exchanges code for agent-account access_token, refresh_token
- *   4. Server stores token on user record, issues our own JWT for browser
+ *   1. SPA → /auth/oauth/bitget/start → redirect to Agent Hub authorize URL
+ *   2. Agent Hub → REDIRECT_URI with ?code=... → SPA → /auth/oauth/bitget/callback
+ *   3. Server exchanges code for Agentic-Account access_token + refresh_token
+ *   4. Server stores token on user record, keeps its own JWT for the browser
  *
  * Live order flow:
  *   POST /trading/order  (JWT + explicit trader approve)
- *     → uses stored agent-account token to POST to Bitget /v3/agent/orders
+ *     → uses stored Agentic-Account token to POST to Bitget /v3/agent/orders
  *     → response contains real order id
  *
  * Kill switch:
- *   POST /trading/kill   → cancel every open order + revoke token
+ *   POST /trading/kill   → cancel every open order on the Agentic Account +
+ *                          revoke the Agent Hub authorization
  *
- * Every write is trader-gated. Set BITGET_LIVE_ENABLED=1 to enable.
- * Without it we just return "paper only". This keeps a safety catch even if
- * OAuth env vars are misconfigured.
+ * Every write is trader-gated. Set BITGET_LIVE_ENABLED=1 to enable routing.
+ * Without it we just return "paper only" — a safety catch even if the Agent
+ * Hub OAuth env vars are misconfigured.
  */
 
 import { logger } from '../lib/log.mjs'
@@ -36,7 +43,7 @@ export function isLiveEnabled() {
 }
 
 export function buildAuthorizeUrl(state) {
-  if (!CLIENT_ID || !REDIRECT_URI) throw new Error('Bitget OAuth not configured — see DEPLOYMENT.md §5')
+  if (!CLIENT_ID || !REDIRECT_URI) throw new Error('Bitget Agentic Account not configured on this server — see DEPLOYMENT.md §5')
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: CLIENT_ID,
@@ -49,7 +56,7 @@ export function buildAuthorizeUrl(state) {
 
 /** Exchange the authorization code for an access + refresh token. */
 export async function exchangeCodeForToken(code) {
-  if (!isLiveEnabled()) throw new Error('Bitget live trading not enabled. Set BITGET_LIVE_ENABLED=1 and provision OAuth credentials.')
+  if (!isLiveEnabled()) throw new Error('Agentic Account routing not enabled. Set BITGET_LIVE_ENABLED=1 and provision Agent Hub OAuth credentials.')
   const res = await fetch(`${OAUTH_HOST}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -126,14 +133,14 @@ export async function getValidAccessToken(userId) {
 }
 
 /**
- * Submit a live agent-account order. Trader-gated at the route layer.
- * NOTE: the exact endpoint + payload shape depends on the Bitget Agent Hub OAuth
- * API you're issued. The code below follows the documented pattern; refine when
- * you receive the final Bitget spec.
+ * Submit a live order to the operator's Agentic Account. Trader-gated at the
+ * route layer. NOTE: the exact endpoint + payload shape depends on the Agent
+ * Hub API version issued to your app; the code below follows the documented
+ * v3 pattern — refine when you receive the final Bitget spec.
  */
 export async function submitLiveOrder(userId, order) {
   const token = await getValidAccessToken(userId)
-  if (!token) throw new Error('no live token — reconnect Bitget Agent Account in Settings')
+  if (!token) throw new Error('no live token — reconnect your Agentic Account in Settings')
   const res = await fetch(`${BITGET_API}/v3/agent/orders`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

@@ -2,8 +2,9 @@
  * Auth middleware + issue/verify helpers.
  *
  * Local dev: POST /auth/dev-login { email } → JWT (no password).
- * Production: POST /auth/oauth/bitget/callback (stub — plug in when Bitget OAuth
- *   app credentials are provisioned; see DEPLOYMENT.md).
+ * Production: POST /auth/oauth/bitget/callback (Bitget Agent Hub OAuth for the
+ *   operator's Agentic Account — plug in once client credentials are
+ *   provisioned; see DEPLOYMENT.md).
  *
  * JWT_SECRET must be set in production. In dev, we fall back to a random secret
  * generated at process start (all previously issued tokens invalidate on restart).
@@ -253,12 +254,12 @@ export function publicUser(u) {
   return rest
 }
 
-/* ------------------------------------------------- Bitget OAuth stub */
+/* ------------------------------------------------- Agentic Account OAuth stub */
 
 /**
- * Wire this to Bitget's Agentic Account OAuth flow. The exchange is:
+ * Wire this to Bitget Agent Hub's Agentic Account OAuth flow. The exchange is:
  *   1. Client redirects to Bitget /oauth/authorize with client_id + redirect_uri.
- *   2. Bitget returns code → POST /auth/oauth/bitget/callback { code }.
+ *   2. Agent Hub returns code → POST /auth/oauth/bitget/callback { code }.
  *   3. This function exchanges the code for an agent-account access token.
  *   4. We create/update the user and issue our own JWT.
  *

@@ -193,9 +193,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
   ])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
   useEffect(() => { const t = setInterval(() => setClock(nowClock()), 1000); return () => clearInterval(t) }, [])
-  // Bitget OAuth callback: after the user approves on Bitget, they're redirected
-  // back to us with ?code=... in the URL. POST it to the server to complete the
-  // handshake, then scrub the code from the URL so refreshes don't retry.
+  // Agentic Account callback: after the user authorizes on Bitget Agent Hub,
+  // they're redirected back with ?code=... in the URL. POST it to the server
+  // to complete the handshake, then scrub the code so refreshes don't retry.
   useEffect(() => {
     if (!hasApi() || !authToken) return
     const params = new URLSearchParams(window.location.search)
@@ -211,9 +211,9 @@ function App({ authUser: signedInUser, onSignedOut }) {
           signal: AbortSignal.timeout(12000),
         })
         const body = await r.json()
-        if (r.ok) setToast('Bitget account connected')
-        else setToast(`Bitget connect failed: ${body?.error || r.status}`)
-      } catch (err) { setToast(`Bitget connect failed: ${err.message}`) }
+        if (r.ok) setToast('Agentic Account connected')
+        else setToast(`Agentic Account connect failed: ${body?.error || r.status}`)
+      } catch (err) { setToast(`Agentic Account connect failed: ${err.message}`) }
       finally {
         // Scrub the code + state from the URL, keep the hash route.
         const clean = window.location.pathname + (window.location.hash || '')
@@ -1725,9 +1725,11 @@ const HORIZON_OPTIONS = [['INTRADAY', 'Intraday'], ['SWING', 'Swing (days to wee
  *   1. Signal MCP — hosted MCP server that powers the desk's research skills.
  *      Auto-polls /bitget/status every 30s.
  *   2. Bitget public WS — live tick source. Same probe as the topbar pill.
- *   3. Agent-account OAuth — Connect Bitget → live-order routing with a big
- *      red kill switch. Live orders stay off unless BITGET_LIVE_ENABLED=1
- *      AND the operator has connected their Bitget account.
+ *   3. Agentic Account — Bitget Agent Hub's isolated agent-only sub-account.
+ *      Live routing goes ONLY here (never the operator's main funds), is
+ *      capped by daily limits Bitget enforces on the sub-account itself, and
+ *      is revocable one-click via the kill switch. Stays off entirely unless
+ *      BITGET_LIVE_ENABLED=1 and the operator has authorized on Agent Hub.
  */
 function BitgetIntegrationsPanel() {
   const token = getToken()
@@ -1763,13 +1765,13 @@ function BitgetIntegrationsPanel() {
     try {
       const r = await fetch(apiUrl('/auth/oauth/bitget/start'), { signal: AbortSignal.timeout(6000) })
       const body = await r.json()
-      if (!r.ok || !body?.authorizeUrl) { setMsg(body?.error || 'OAuth not configured on this server.'); return }
+      if (!r.ok || !body?.authorizeUrl) { setMsg(body?.error || 'Agentic Account not configured on this server.'); return }
       window.location.href = body.authorizeUrl
     } catch (err) { setMsg(err.message) } finally { setBusy(null) }
   }
   const killSwitch = async () => {
     if (!token) return
-    if (!confirm('Cancel every open Bitget order and revoke the token? Live routing will be OFF until you reconnect.')) return
+    if (!confirm('Cancel every open order on your Agentic Account and revoke authorization? Live routing will be OFF until you reconnect on Agent Hub.')) return
     setBusy('kill'); setMsg(null)
     try {
       const r = await fetch(apiUrl('/trading/kill'), { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) })
@@ -1786,7 +1788,7 @@ function BitgetIntegrationsPanel() {
 
   return (
     <div className="panel">
-      <div className="panel-head"><h3>Bitget integrations</h3><small>MCP · WS · Agent account</small></div>
+      <div className="panel-head"><h3>Bitget integrations</h3><small>MCP · WS · Agentic Account</small></div>
       <div className="settings-body">
         <div className="kv-row">
           <span>Signal MCP</span>
@@ -1817,26 +1819,32 @@ function BitgetIntegrationsPanel() {
         </div>
 
         <div className="kv-row">
-          <span>Agent-account OAuth</span>
+          <span>Agentic Account</span>
           <b>
             <span className={trading?.connected ? 'pill green mini' : 'pill amber mini'} style={{ marginRight: 6 }}>
-              {trading?.connected ? 'CONNECTED' : (trading?.liveEnabled ? 'DISCONNECTED' : 'PAPER-ONLY')}
+              {trading?.connected ? 'CONNECTED' : (trading?.liveEnabled ? 'NOT AUTHORIZED' : 'PAPER-ONLY')}
             </span>
             {trading?.connected
               ? <>scope <em className="muted">{trading.scope || '—'}</em></>
               : trading?.liveEnabled
-                ? <em className="muted">click connect to authorize</em>
-                : <em className="muted">live trading disabled by operator</em>}
+                ? <em className="muted">authorize on Bitget Agent Hub to enable live routing</em>
+                : <em className="muted">live routing disabled by operator</em>}
           </b>
         </div>
         {trading?.killedAt && (
           <div className="kv-row muted"><span>Last kill</span><b style={{ fontSize: 11 }}>{new Date(trading.killedAt).toLocaleString()}</b></div>
         )}
 
+        <p className="settings-note" style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5 }}>
+          Live routing goes to your Bitget <b>Agentic Account</b> only — a dedicated Agent Hub sub-account isolated from your main funds,
+          capped by the daily limits you set on Agent Hub, and revocable one-click via the kill switch. Nothing routes without your
+          per-order approval.
+        </p>
+
         <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           {trading?.liveEnabled && !trading?.connected && (
             <button className="btn primary sm" onClick={connectBitget} disabled={busy === 'connect'}>
-              {busy === 'connect' ? 'Redirecting…' : 'Connect Bitget'}
+              {busy === 'connect' ? 'Redirecting…' : 'Connect Agentic Account'}
             </button>
           )}
           {trading?.connected && (
@@ -1846,7 +1854,7 @@ function BitgetIntegrationsPanel() {
               disabled={busy === 'kill'}
               style={{ background: '#7a1f1f', color: '#fff', border: '1px solid #a83232' }}
             >
-              {busy === 'kill' ? 'Halting…' : 'Kill switch · cancel all + revoke'}
+              {busy === 'kill' ? 'Halting…' : 'Kill switch · cancel all + revoke authorization'}
             </button>
           )}
         </div>
@@ -2039,14 +2047,15 @@ function Section({ title, icon, tone, children }) {
  */
 
 /**
- * "Route to Bitget" — real-order submit for the current report. Renders only
- * when the user has a live agent-account connection AND live routing is
- * enabled on the server. Otherwise stays hidden so the paper path is the
- * only path visible.
+ * "Route to Agentic Account" — real-order submit for the current report.
+ * Renders only when the operator has authorized their Bitget Agentic Account
+ * on Agent Hub AND live routing is enabled on the server; otherwise the whole
+ * control stays hidden so the paper path is the only path visible.
  *
  * Every click is trader-gated by an explicit confirm modal — the server-side
- * /trading/order route also requires `confirm: true` in the payload so a
- * bug in the client cannot bypass approval.
+ * /trading/order route also requires `confirm: true` in the payload so a bug
+ * in the client cannot bypass approval. Orders route to the isolated Agent
+ * Hub sub-account, not the operator's main funds.
  */
 function RouteToBitgetButton({ report }) {
   const [status, setStatus] = useState(null)
@@ -2101,11 +2110,11 @@ function RouteToBitgetButton({ report }) {
         disabled={!canRoute || pending}
         onClick={() => setAsking(true)}
       >
-        {pending ? 'ROUTING…' : status?.connected ? 'ROUTE TO BITGET (LIVE)' : 'CONNECT BITGET FIRST →'}
+        {pending ? 'ROUTING…' : status?.connected ? 'ROUTE TO AGENTIC ACCOUNT (LIVE)' : 'CONNECT AGENTIC ACCOUNT →'}
       </button>
       {result && (
         <span style={{ marginLeft: 8, fontSize: 11 }} className={result.ok ? 'up' : 'down'}>
-          {result.ok ? `Bitget order accepted · ${result.id}` : `Order rejected: ${result.message}`}
+          {result.ok ? `Agentic Account order accepted · ${result.id}` : `Order rejected: ${result.message}`}
         </span>
       )}
       {asking && (
@@ -2117,10 +2126,10 @@ function RouteToBitgetButton({ report }) {
             onClick={e => e.stopPropagation()}
             style={{ maxWidth: 480, background: 'var(--bg-elev, #131a15)', color: 'var(--fg)', border: '1px solid var(--edge)', padding: 20, borderRadius: 6 }}
           >
-            <h3 style={{ margin: '0 0 12px' }}>Route <b>{report.symbol}</b> to Bitget?</h3>
-            <p>This submits a real <b>{report.signal.direction}</b> order for <b>${(report.suggestion.notionalUsd || 0).toLocaleString()}</b> notional on your connected Bitget agent account.</p>
+            <h3 style={{ margin: '0 0 12px' }}>Route <b>{report.symbol}</b> to your Agentic Account?</h3>
+            <p>This submits a real <b>{report.signal.direction}</b> order for <b>${(report.suggestion.notionalUsd || 0).toLocaleString()}</b> notional to your <b>Bitget Agentic Account</b> — the isolated Agent Hub sub-account you authorized, not your main funds.</p>
             <p className="muted" style={{ fontSize: 12 }}>Entry {report.suggestion.entry} · Stop {report.suggestion.stop} · Target {report.suggestion.target}</p>
-            <p className="muted" style={{ fontSize: 12 }}>You can halt every open Bitget order at any time from Settings → Bitget integrations → Kill switch.</p>
+            <p className="muted" style={{ fontSize: 12 }}>You can halt every open order and revoke authorization at any time from Settings → Bitget integrations → Kill switch.</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
               <button className="btn ghost sm" onClick={() => setAsking(false)}>Cancel</button>
               <button className="btn primary sm" onClick={submitReal}>Route real order</button>
@@ -2217,7 +2226,7 @@ function ActionSummaryCard({ report, openPosition, isTradable, decide, closeAtMa
 
       {sug && !isSitOut && (
         <p className="action-legal">
-          Paper trading only · trader owns every decision · no live orders routed unless a Bitget account is wired and each order is explicitly approved.
+          Paper trading only · trader owns every decision · no live orders routed unless a Bitget Agentic Account is authorized on Agent Hub and each order is explicitly approved.
         </p>
       )}
     </aside>

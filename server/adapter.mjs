@@ -674,7 +674,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { results, cache: historyStatus() })
     }
 
-    // Bitget OAuth for live agent-account trading
+    // Bitget Agentic Account — Agent Hub OAuth authorize + callback for the
+    // isolated agent-only sub-account. Route paths keep the historical
+    // "/auth/oauth/bitget/*" shape because Bitget's redirect_uri and any
+    // external clients are already pointing at it.
     if (route === 'GET /auth/oauth/bitget/start') {
       try {
         const stateTok = url.searchParams.get('state') || ''
@@ -704,7 +707,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'POST /trading/order') {
       const user = requireAuth(req, res); if (!user) return
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
-      if (!isLiveEnabled()) return json(res, 400, { error: 'live trading disabled (paper only). Set BITGET_LIVE_ENABLED=1 and OAuth credentials.' })
+      if (!isLiveEnabled()) return json(res, 400, { error: 'Agentic Account routing disabled (paper only). Set BITGET_LIVE_ENABLED=1 and provision Agent Hub OAuth credentials.' })
       if (body?.confirm !== true) return json(res, 400, { error: 'explicit trader approve required (confirm: true)' })
       if (!body?.asset || !body?.direction || !body?.notional) return json(res, 400, { error: 'asset, direction, notional required' })
       try {

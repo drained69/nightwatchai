@@ -88,7 +88,7 @@ The hackathon-critical claim: *AI extracts, synthesizes, and challenges; the tra
 | **Copy to paper** | Every research report shows a top-of-page **Action Summary** card — verdict, plan (entry/stop/target/size/friction), one-click **COPY TO PAPER PORTFOLIO**, plus REJECT / SIT OUT / TRADE ON BITGET |
 | **Playbooks** | Public, published strategies with real-price paper PnL — no real user funds |
 | **The Assayer** | AI chat companion that drafts Playbooks from plain-English prompts |
-| **Live trading (opt-in)** | Bitget Agentic Account OAuth flow + trader-gated live order path + kill switch |
+| **Live trading (opt-in)** | Bitget Agentic Account via Agent Hub OAuth — orders route to an isolated agent-only sub-account (never the operator's main funds), each order gated by explicit approval, kill switch cancels every open order and revokes authorization one-click |
 
 ### Platform
 
@@ -219,7 +219,7 @@ Two clean layers: the **engine** (`src/domain.js`, `src/backtest.js`) knows noth
 │   sse.mjs      Server-Sent Events bus                      │
 │   ratelimit.mjs sliding window per-key limiter             │
 │   jwt.mjs      HS256 JWT sign/verify (no dep)              │
-│   auth.mjs     dev-login + Bitget OAuth callback scaffold  │
+│   auth.mjs     dev-login + Agentic Account OAuth callback │
 │   store.mjs    per-user JSON file store                    │
 │   llm.mjs      Qwen / xAI / Anthropic / OpenAI completion  │
 │   push.mjs     Web Push (VAPID auto-generated)             │
@@ -248,7 +248,7 @@ Three seams — each is honest about what's live vs simulated:
 
 1. **Public prices + candles + indicators + books.** Direct HTTPS to `api.bitget.com` for all 18 assets — the R-prefixed tokenized-equity pairs (primary universe) plus crypto spot pairs (correlation set). No auth required. Runs by default when you `npm run server`. The server builds a live universe (real price, 24h/7d change, ATR, RSI, volume z-score, spread) and injects it into every research, thesis, execution-help and scan call, alongside real wire news and a real macro snapshot (DXY/SPX/NDX/VIX/UST10Y via Yahoo).
 2. **`bitget-signal` skills.** Skills compute from the live context above by default; seeded deterministic values remain only as the offline fallback (clearly stamped `DEMO`). Wire `BITGET_MCP_URL` to point at Bitget's Agent Hub MCP sidecar (`bgc mcp serve --port 9091`) and the badge flips to `BITGET MCP · LIVE`. Skill schemas match.
-3. **Live paper trading via Agentic Account.** OAuth callback scaffolded in `server/lib/auth.mjs`; final Bitget order call lives in `applyTraderDecision`. Enable when you provision `BITGET_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`. Trader Approve is always required.
+3. **Live routing to your Bitget Agentic Account.** Approved research reports can be routed as real orders to the operator's Agentic Account — the isolated Agent Hub sub-account that's separate from their main funds. Agent Hub OAuth handshake in `server/providers/bitget-trading.mjs`, wired to the SPA via a "Connect Agentic Account" button in Settings and a per-report "Route to Agentic Account" confirm modal. Provision `BITGET_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI` + `BITGET_LIVE_ENABLED=1` to enable; per-order Trader Approve stays mandatory.
 
 Full setup for each in [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
@@ -333,7 +333,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | `QWEN_API_KEY` | Qwen narration + news classifier (any OpenAI-compatible endpoint) | Optional |
 | `XAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Fallback LLM providers (first key wins) | Optional |
 | `BITGET_MCP_URL` | Route the 5 bitget-signal skills to the Bitget MCP sidecar | Optional |
-| `BITGET_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | Bitget Agentic Account OAuth for live paper routing | Optional |
+| `BITGET_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | Agent Hub OAuth for live routing to your isolated Agentic Account | Optional |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | Web Push notifications | Optional |
 | `RESEND_API_KEY` | Real transactional email — sign-in codes AND the daily Alpha of the Day brief. Without it, both features fall back to server-log delivery only. | Required for email |
 | `EMAIL_FROM` | `From:` address for outbound mail. Default `NIGHTWATCH AI <onboarding@resend.dev>`. Set to a domain-verified sender in Resend for production. | Optional |
@@ -398,7 +398,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 |---|---|---|---|
 | POST | `/auth/dev-login` | Local dev login | Disabled in prod unless `ALLOW_DEV_LOGIN=1` |
 | GET | `/auth/oauth/bitget/start` | Bitget Agentic Account authorize URL | — |
-| POST | `/auth/oauth/bitget/callback` | Exchange OAuth code for agent-account token | JWT |
+| POST | `/auth/oauth/bitget/callback` | Exchange Agent Hub code for Agentic Account token | JWT |
 | GET | `/session` | Load per-user persistent session | JWT |
 | PATCH | `/session` | Merge patch into session | JWT |
 
@@ -406,8 +406,8 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
-| GET | `/trading/status` | Live-trading connection state per user | JWT |
-| POST | `/trading/order` | Submit live agent-account order (trader-gated) | JWT + `confirm:true` |
+| GET | `/trading/status` | Agentic Account authorization state per user | JWT |
+| POST | `/trading/order` | Submit live order to the operator's Agentic Account (trader-gated) | JWT + `confirm:true` |
 | POST | `/trading/kill` | Cancel all open orders + revoke token | JWT |
 
 ### Alerts, Push & Sharing
@@ -531,7 +531,7 @@ server/
     macro.mjs          real DXY/SPX/NDX/VIX/UST10Y via Yahoo Finance
     crossvenue.mjs     Binance+OKX+Bitget perp funding/OI, spot book depth stats
     marketintel.mjs    Fear & Greed, ETF flows (best-effort), BTC network stats
-    bitget-trading.mjs Agentic-Account OAuth + live order path (opt-in)
+    bitget-trading.mjs Agentic Account OAuth + live order path (opt-in)
   lib/
     log.mjs · sse.mjs · ratelimit.mjs · jwt.mjs · auth.mjs · store.mjs ·
     llm.mjs · push.mjs

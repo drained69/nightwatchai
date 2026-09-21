@@ -37,7 +37,7 @@ import { requireAuth, devLogin, signup, login, publicUser, requestSignInCode, ve
 import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './lib/store.mjs'
 import { getAllTickers, getAllTickersLive, getTicker, computeIndicators } from './providers/bitget.mjs'
 import { startBitgetWs, stopBitgetWs, getWsStatus } from './providers/bitget-ws.mjs'
-import { getTopTraders as getBitgetTopTraders, SORT_FIELDS as BITGET_COPY_SORTS } from './providers/bitget-copytrading.mjs'
+import { startBitgetMcp, stopBitgetMcp, callMcpTool, listMcpTools, mcpStatus } from './providers/bitget-mcp.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
 import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
 import { getEarningsFor, getUpcomingEarnings, EQUITY_UNIVERSE as EARNINGS_UNIVERSE } from './providers/earnings.mjs'
@@ -105,6 +105,11 @@ if (NEWS_ENABLED) news.start()
 // Replaces the 10s REST poll whenever the socket has fresh data; REST is the
 // cold-boot and reconnect fallback.
 if (process.env.BITGET_WS_ENABLED !== '0') startBitgetWs()
+
+// Bitget Signal MCP — connect to Bitget's hosted MCP sidecar so the research
+// desk can delegate skills (technical-analysis, macro, sentiment, news) to
+// first-party Bitget infrastructure instead of the local skill pack.
+startBitgetMcp()
 
 // History cache + auto-backtest of published Playbooks so Explore + detail views
 // has real numbers on first render. Runs in the background so boot is fast.
@@ -293,17 +298,23 @@ Invalidation price: ${r.invalidation?.price || 'n/a'}`
 
 /* -------------------------------------------------- Bitget MCP probe */
 
-async function probeBitget() {
-  if (!BITGET_MCP_URL) {
-    return { connected: false, model: null, skills: [], reason: 'BITGET_MCP_URL not set — using local skill pack + Bitget public prices.' }
+/**
+ * Report the state of Bitget's hosted Signal MCP. The real MCP connection
+ * lives in providers/bitget-mcp.mjs; this shape stays backwards-compatible
+ * with the older /bitget/status consumers (connected/model/skills).
+ */
+function probeBitget() {
+  const s = mcpStatus()
+  return {
+    connected: s.connected,
+    model:     s.server || 'bitget-signal',
+    version:   s.version || null,
+    skills:    s.toolNames,
+    reason:    s.connected
+      ? `${s.tools} MCP tools reachable via ${s.server}`
+      : s.lastError || (s.enabled ? 'connecting…' : 'MCP disabled'),
+    url:       s.url,
   }
-  try {
-    const res = await fetch(`${BITGET_MCP_URL.replace(/\/$/, '')}/skills`, { signal: AbortSignal.timeout(2500) })
-    if (!res.ok) return { connected: false, model: null, skills: [], reason: `MCP returned ${res.status}` }
-    const body = await res.json()
-    const skills = Array.isArray(body?.skills) ? body.skills.map(s => s.id || s.name) : []
-    return { connected: true, model: body?.provider || 'bitget-signal', skills, reason: `${skills.length} bitget-signal skills reachable` }
-  } catch (err) { return { connected: false, model: null, skills: [], reason: err.message } }
 }
 
 /* -------------------------------------------------- request handler */
@@ -322,7 +333,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /health') {
       return json(res, 200, {
         ok: true,
-        provider: { llm: llm.provider, model: llm.model, bitgetMcp: Boolean(BITGET_MCP_URL), bitgetWs: getWsStatus() },
+        provider: { llm: llm.provider, model: llm.model, bitgetMcp: probeBitget(), bitgetWs: getWsStatus() },
         news: { enabled: NEWS_ENABLED, seen: news._items.length, feeds: FEEDS.length },
         universe: { total: DEMO_UNIVERSE.length, ...liveUniverseStatus() },
         mailer: mailerStatus(),
@@ -349,7 +360,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (route === 'GET /bitget/status') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
-      return json(res, 200, await probeBitget())
+      return json(res, 200, probeBitget())
+    }
+    // MCP tool catalog + one-shot invocation. Judges can hit /mcp/tools to
+    // see the actual tools exposed by Bitget's hosted signal MCP.
+    if (route === 'GET /mcp/tools') {
+      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
+      return json(res, 200, { ...mcpStatus(), tools: listMcpTools() })
+    }
+    if (route === 'POST /mcp/call') {
+      if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      if (!body?.name) return json(res, 400, { error: 'name required' })
+      const out = await callMcpTool(String(body.name), body.arguments || {})
+      return json(res, out.ok ? 200 : 502, out)
     }
 
     // Prices
@@ -368,17 +392,6 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /bitget/ws-status') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
       return json(res, 200, getWsStatus())
-    }
-    // Bitget public copy-trading leaderboard — real top-trader ROI/AUM/followers
-    // straight from bitget.com/copy-trading. Cached 15 min server-side.
-    if (route === 'GET /copytrading/leaderboard') {
-      if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
-      const sort = url.searchParams.get('sort') || 'weekProfitRate'
-      const limit = limitParam(url.searchParams.get('limit'), 20, 50)
-      const sortField = Object.keys(BITGET_COPY_SORTS).includes(sort) ? sort : 'weekProfitRate'
-      const out = await getBitgetTopTraders({ sortField, limit }).catch(() => null)
-      if (!out) return json(res, 503, { error: 'bitget copy-trading leaderboard unavailable', sortField, live: false })
-      return json(res, 200, { ...out, sortOptions: BITGET_COPY_SORTS })
     }
     if (route === 'GET /prices/stream') {
       return priceBus.subscribe(res)
@@ -448,7 +461,7 @@ const server = http.createServer(async (req, res) => {
           ? await liveEnhanceArtifact(artifact)
           : { artifact, live: {} }
         const { artifact: rewritten, engine: engineName } = await narrateReport(withLive, request.question || request.thesis)
-        const bitget = await probeBitget()
+        const bitget = probeBitget()
         // Record the signal for the public history + accuracy ledger
         if (request.intent === 'research' && rewritten?.report?.signal?.status === 'SIGNAL') {
           try {
@@ -1071,5 +1084,5 @@ server.listen(PORT, HOST, () => {
   }, `NIGHTWATCH AI adapter online`)
 })
 
-process.on('SIGTERM', () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); server.close(() => process.exit(0)) })
-process.on('SIGINT',  () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); server.close(() => process.exit(0)) })
+process.on('SIGTERM', () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); stopBitgetMcp(); server.close(() => process.exit(0)) })
+process.on('SIGINT',  () => { logger.info('shutting down'); news.stop(); stopBitgetWs(); stopBitgetMcp(); server.close(() => process.exit(0)) })

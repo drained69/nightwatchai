@@ -182,6 +182,36 @@ function App({ authUser: signedInUser, onSignedOut }) {
   ])
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
   useEffect(() => { const t = setInterval(() => setClock(nowClock()), 1000); return () => clearInterval(t) }, [])
+  // Bitget OAuth callback: after the user approves on Bitget, they're redirected
+  // back to us with ?code=... in the URL. POST it to the server to complete the
+  // handshake, then scrub the code from the URL so refreshes don't retry.
+  useEffect(() => {
+    if (!hasApi() || !authToken) return
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    const bgTag = params.get('state')
+    if (!code) return
+    ;(async () => {
+      try {
+        const r = await fetch(apiUrl('/auth/oauth/bitget/callback'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ code, state: bgTag }),
+          signal: AbortSignal.timeout(12000),
+        })
+        const body = await r.json()
+        if (r.ok) setToast('Bitget account connected')
+        else setToast(`Bitget connect failed: ${body?.error || r.status}`)
+      } catch (err) { setToast(`Bitget connect failed: ${err.message}`) }
+      finally {
+        // Scrub the code + state from the URL, keep the hash route.
+        const clean = window.location.pathname + (window.location.hash || '')
+        window.history.replaceState({}, '', clean)
+        setPage('settings')
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken])
   useEffect(() => {
     if (!toast) return
     // Coverage / rejection notices deserve a longer dwell time so the user
@@ -913,6 +943,7 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
           <p className="note">{report.suggestion.notes.join(' ')}</p>
           <div className="report-actions">
             {isTradable && <button className="btn primary" onClick={() => decide('APPROVE')}>APPROVE PAPER TRADE</button>}
+            {isTradable && <RouteToBitgetButton report={report} />}
             {isTradable && <button className="btn ghost" onClick={() => decide('REJECT', { rationale: 'Not now.' })}>REJECT</button>}
             <button className="btn ghost" onClick={() => decide('SIT_OUT', { rationale: 'Sit-out logged.' })}>LOG SIT-OUT</button>
             {openPosition && <button className="btn ghost" onClick={() => closeAtMark(openPosition.id)}>CLOSE AT MARK</button>}
@@ -1127,114 +1158,6 @@ function ThesisResult({ artifact }) {
   )
 }
 
-/* ------------------------------------------------------- Bitget copy-trading leaderboard */
-
-/**
- * Live top-trader strip pulled straight from Bitget's own copy-trading
- * leaderboard. Every row deep-links to that trader's Bitget profile — the
- * user can copy-follow with one click, we just surface the ranking.
- */
-function BitgetTopTradersStrip() {
-  const [data, setData] = useState(null)
-  const [sort, setSort] = useState('weekProfitRate')
-  const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState(null)
-
-  useEffect(() => {
-    if (!hasApi()) { setLoading(false); return }
-    let alive = true
-    setLoading(true); setErr(null)
-    fetch(apiUrl(`/copytrading/leaderboard?sort=${sort}&limit=5`), { signal: AbortSignal.timeout(10000) })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(j => { if (alive) { setData(j); setLoading(false) } })
-      .catch(e => { if (alive) { setErr(e.message); setLoading(false) } })
-    return () => { alive = false }
-  }, [sort])
-
-  if (!hasApi()) return null
-
-  const traders = data?.traders || []
-  const total = data?.total || 0
-
-  return (
-    <div className="panel">
-      <div className="panel-head" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Bitget top copy-traders
-          <span className="pill green mini">LIVE</span>
-        </h3>
-        <small style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label htmlFor="bg-copy-sort" style={{ color: 'var(--muted)' }}>Sort:</label>
-          <select
-            id="bg-copy-sort"
-            value={sort}
-            onChange={e => setSort(e.target.value)}
-            style={{ background: 'transparent', color: 'var(--fg)', border: '1px solid var(--edge)', borderRadius: 4, padding: '2px 6px', fontSize: 12 }}
-          >
-            <option value="weekProfitRate">7D ROI</option>
-            <option value="monthProfitRate">30D ROI</option>
-            <option value="totalProfit">All-time PnL</option>
-            <option value="followCount">Followers</option>
-          </select>
-          {total > 0 && <em className="muted">of {total.toLocaleString()}</em>}
-        </small>
-      </div>
-
-      {loading && <div className="empty-body" style={{ padding: 16 }}>Loading Bitget leaderboard…</div>}
-      {!loading && err && (
-        <div className="empty-body" style={{ padding: 16 }}>
-          Bitget leaderboard unreachable. <a href="https://www.bitget.com/copy-trading/futures" target="_blank" rel="noopener noreferrer">View on Bitget →</a>
-        </div>
-      )}
-      {!loading && !err && traders.length === 0 && (
-        <div className="empty-body" style={{ padding: 16 }}>No traders returned.</div>
-      )}
-      {!loading && !err && traders.length > 0 && (
-        <div className="pos-table">
-          <div className="pos-head">
-            <span>#</span>
-            <span>Trader</span>
-            <span>ROI</span>
-            <span>30D PnL</span>
-            <span>Copier P&L</span>
-            <span>AUM</span>
-            <span>MDD</span>
-            <span>Followers</span>
-            <span></span>
-          </div>
-          {traders.map(t => (
-            <div className="pos-row" key={t.uid || t.rank}>
-              <b>{t.rank}</b>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {t.avatar && <img src={t.avatar} alt="" width={20} height={20} style={{ borderRadius: '50%', flex: '0 0 20px' }} onError={e => { e.target.style.display = 'none' }} />}
-                <b style={{ fontSize: 12 }}>{t.displayName}</b>
-                {t.grade && <em className="muted" style={{ fontSize: 10 }}>{t.grade}</em>}
-              </span>
-              <b className={t.roiPct >= 0 ? 'up' : 'down'}>{t.roiPct != null ? `${t.roiPct.toFixed(2)}%` : '—'}</b>
-              <b className={t.pnl30dUsd >= 0 ? 'up' : 'down'}>{t.pnl30dUsd != null ? fmtAbs(t.pnl30dUsd) : '—'}</b>
-              <b className={t.copierProfitUsd >= 0 ? 'up' : 'down'}>{t.copierProfitUsd != null ? fmtAbs(t.copierProfitUsd) : '—'}</b>
-              <span>{t.aumUsd != null ? `$${t.aumUsd.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'}</span>
-              <span className="down">{t.mddPct != null ? `${t.mddPct.toFixed(1)}%` : '—'}</span>
-              <span>{t.followers}<em className="muted"> / {t.maxFollowers || '—'}</em></span>
-              <span>
-                {t.profileUrl ? (
-                  <a href={t.profileUrl} target="_blank" rel="noopener noreferrer" className="btn ghost sm" style={{ padding: '3px 8px', fontSize: 11 }}>
-                    Follow on Bitget <ExternalLink size={10} />
-                  </a>
-                ) : null}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div style={{ padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--edge)' }}>
-        <em className="muted" style={{ fontSize: 11 }}>Source: bitget.com/copy-trading · updated every 15 min</em>
-        <a href="https://www.bitget.com/copy-trading/futures" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11 }}>Full leaderboard →</a>
-      </div>
-    </div>
-  )
-}
-
 /* ------------------------------------------------------- Portfolio page */
 
 function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submit }) {
@@ -1292,12 +1215,6 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
         <div><small>LOCAL OPEN</small><b>{open.length}</b></div>
         <div><small>LOCAL CLOSED</small><b>{closed.length}</b></div>
       </div>
-
-      {/* Bitget's own top copy-traders — first-party leaderboard the app pulls
-          direct from bitget.com. Ranked side-by-side with our local playbooks
-          below so the trader can compare their own allocations against the
-          people actually winning on Bitget right now. */}
-      <BitgetTopTradersStrip />
 
       {/* Single source of truth for both published + followed playbooks. The
           same panel renders inside The Assayer so a freshly-drafted strategy
@@ -1790,6 +1707,144 @@ const RISK_OPTIONS    = [['CONSERVATIVE', 'Conservative'], ['MODERATE', 'Moderat
 const STYLE_OPTIONS   = [['EVENT_DRIVEN', 'Event-driven'], ['TREND_FOLLOW', 'Trend-following'], ['MEAN_REVERT', 'Mean reversion'], ['MACRO', 'Macro']]
 const HORIZON_OPTIONS = [['INTRADAY', 'Intraday'], ['SWING', 'Swing (days to weeks)'], ['POSITION', 'Position (weeks to months)']]
 
+/* -------------------------------------------------- Bitget integrations panel */
+
+/**
+ * Ops surface for every Bitget-native integration:
+ *   1. Signal MCP — hosted MCP server that powers the desk's research skills.
+ *      Auto-polls /bitget/status every 30s.
+ *   2. Bitget public WS — live tick source. Same probe as the topbar pill.
+ *   3. Agent-account OAuth — Connect Bitget → live-order routing with a big
+ *      red kill switch. Live orders stay off unless BITGET_LIVE_ENABLED=1
+ *      AND the operator has connected their Bitget account.
+ */
+function BitgetIntegrationsPanel() {
+  const token = getToken()
+  const [mcp, setMcp]           = useState(null)
+  const [ws,  setWs]            = useState(null)
+  const [trading, setTrading]   = useState(null)
+  const [busy, setBusy]         = useState(null)
+  const [msg, setMsg]           = useState(null)
+
+  useEffect(() => {
+    if (!hasApi()) return
+    let alive = true
+    const pull = async () => {
+      try {
+        const [m, w] = await Promise.all([
+          fetch(apiUrl('/bitget/status'),    { signal: AbortSignal.timeout(6000) }).then(r => r.ok ? r.json() : null),
+          fetch(apiUrl('/bitget/ws-status'), { signal: AbortSignal.timeout(6000) }).then(r => r.ok ? r.json() : null),
+        ])
+        if (!alive) return
+        if (m) setMcp(m); if (w) setWs(w)
+        if (token) {
+          const t = await fetch(apiUrl('/trading/status'), { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6000) })
+            .then(r => r.ok ? r.json() : null)
+          if (alive && t) setTrading(t)
+        }
+      } catch { /* keep last known */ }
+    }
+    pull(); const it = setInterval(pull, 30_000); return () => { alive = false; clearInterval(it) }
+  }, [token])
+
+  const connectBitget = async () => {
+    setBusy('connect'); setMsg(null)
+    try {
+      const r = await fetch(apiUrl('/auth/oauth/bitget/start'), { signal: AbortSignal.timeout(6000) })
+      const body = await r.json()
+      if (!r.ok || !body?.authorizeUrl) { setMsg(body?.error || 'OAuth not configured on this server.'); return }
+      window.location.href = body.authorizeUrl
+    } catch (err) { setMsg(err.message) } finally { setBusy(null) }
+  }
+  const killSwitch = async () => {
+    if (!token) return
+    if (!confirm('Cancel every open Bitget order and revoke the token? Live routing will be OFF until you reconnect.')) return
+    setBusy('kill'); setMsg(null)
+    try {
+      const r = await fetch(apiUrl('/trading/kill'), { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(9000) })
+      const body = await r.json()
+      if (!r.ok) { setMsg(body?.error || 'kill switch failed'); return }
+      setMsg(`Kill switch fired · ${body.result?.cancelled || 0} cancelled · token revoked: ${Boolean(body.result?.tokenRevoked)}`)
+      const t = await fetch(apiUrl('/trading/status'), { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null)
+      if (t) setTrading(t)
+    } catch (err) { setMsg(err.message) } finally { setBusy(null) }
+  }
+
+  const mcpConnected = Boolean(mcp?.connected)
+  const wsConnected  = Boolean(ws?.connected)
+
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Bitget integrations</h3><small>MCP · WS · Agent account</small></div>
+      <div className="settings-body">
+        <div className="kv-row">
+          <span>Signal MCP</span>
+          <b>
+            <span className={mcpConnected ? 'pill green mini' : 'pill amber mini'} style={{ marginRight: 6 }}>
+              {mcpConnected ? 'LIVE' : (mcp ? 'OFFLINE' : '…')}
+            </span>
+            {mcp ? <>{mcp.model || '—'} · {(mcp.skills || []).length} tools</> : 'checking…'}
+          </b>
+        </div>
+        {mcp?.url && <div className="kv-row muted"><span>MCP URL</span><b style={{ fontSize: 11 }}>{mcp.url}</b></div>}
+        {mcp && !mcpConnected && mcp.reason && <div className="kv-row muted"><span>MCP note</span><b style={{ fontSize: 11 }}>{mcp.reason}</b></div>}
+        {mcp?.skills?.length > 0 && (
+          <div className="kv-row" style={{ alignItems: 'flex-start' }}>
+            <span>MCP tools</span>
+            <b style={{ fontSize: 11, textAlign: 'right', maxWidth: '70%' }}>{mcp.skills.join(' · ')}</b>
+          </div>
+        )}
+
+        <div className="kv-row">
+          <span>Public WebSocket</span>
+          <b>
+            <span className={wsConnected ? 'pill green mini' : 'pill amber mini'} style={{ marginRight: 6 }}>
+              {wsConnected ? 'STREAMING' : (ws ? 'RECONNECTING' : '…')}
+            </span>
+            {ws ? <>{ws.cachedPairs}/{ws.subscribed} pairs · {ws.msgCount?.toLocaleString() || 0} msgs</> : 'checking…'}
+          </b>
+        </div>
+
+        <div className="kv-row">
+          <span>Agent-account OAuth</span>
+          <b>
+            <span className={trading?.connected ? 'pill green mini' : 'pill amber mini'} style={{ marginRight: 6 }}>
+              {trading?.connected ? 'CONNECTED' : (trading?.liveEnabled ? 'DISCONNECTED' : 'PAPER-ONLY')}
+            </span>
+            {trading?.connected
+              ? <>scope <em className="muted">{trading.scope || '—'}</em></>
+              : trading?.liveEnabled
+                ? <em className="muted">click connect to authorize</em>
+                : <em className="muted">live trading disabled by operator</em>}
+          </b>
+        </div>
+        {trading?.killedAt && (
+          <div className="kv-row muted"><span>Last kill</span><b style={{ fontSize: 11 }}>{new Date(trading.killedAt).toLocaleString()}</b></div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          {trading?.liveEnabled && !trading?.connected && (
+            <button className="btn primary sm" onClick={connectBitget} disabled={busy === 'connect'}>
+              {busy === 'connect' ? 'Redirecting…' : 'Connect Bitget'}
+            </button>
+          )}
+          {trading?.connected && (
+            <button
+              className="btn sm"
+              onClick={killSwitch}
+              disabled={busy === 'kill'}
+              style={{ background: '#7a1f1f', color: '#fff', border: '1px solid #a83232' }}
+            >
+              {busy === 'kill' ? 'Halting…' : 'Kill switch · cancel all + revoke'}
+            </button>
+          )}
+        </div>
+        {msg && <p className="settings-note" style={{ marginTop: 8 }}>{msg}</p>}
+      </div>
+    </div>
+  )
+}
+
 function SettingsPage({ session, setSession, onReset, user, setPage }) {
   const prefs = session.memory.preferences
   const [confirmingReset, setConfirmingReset] = useState(false)
@@ -1830,6 +1885,8 @@ function SettingsPage({ session, setSession, onReset, user, setPage }) {
           </div>
         </div>
       )}
+
+      <BitgetIntegrationsPanel />
 
       <div className="panel">
         <div className="panel-head"><h3>Trader profile</h3><small>Shapes signal filtering and stress-test framing</small></div>
@@ -1969,6 +2026,101 @@ function Section({ title, icon, tone, children }) {
  * top of every research report so the trader sees the verdict, the plan and
  * the copy-to-paper button before scrolling into the detail grid.
  */
+
+/**
+ * "Route to Bitget" — real-order submit for the current report. Renders only
+ * when the user has a live agent-account connection AND live routing is
+ * enabled on the server. Otherwise stays hidden so the paper path is the
+ * only path visible.
+ *
+ * Every click is trader-gated by an explicit confirm modal — the server-side
+ * /trading/order route also requires `confirm: true` in the payload so a
+ * bug in the client cannot bypass approval.
+ */
+function RouteToBitgetButton({ report }) {
+  const [status, setStatus] = useState(null)
+  const [pending, setPending] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const [result, setResult] = useState(null)
+  const token = getToken()
+
+  useEffect(() => {
+    if (!hasApi() || !token) return
+    let alive = true
+    fetch(apiUrl('/trading/status'), { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(6000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (alive && j) setStatus(j) })
+      .catch(() => { /* leave null */ })
+    return () => { alive = false }
+  }, [token])
+
+  const canRoute = Boolean(status?.liveEnabled && status?.connected && report?.signal?.direction && report?.suggestion?.notionalUsd)
+  if (!status?.liveEnabled) return null       // paper-only host — hide entirely.
+
+  const submitReal = async () => {
+    setAsking(false); setPending(true); setResult(null)
+    try {
+      const r = await fetch(apiUrl('/trading/order'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          asset:     report.symbol,
+          direction: report.signal.direction,
+          notional:  report.suggestion.notionalUsd,
+          entry:     report.suggestion.entry,
+          stop:      report.suggestion.stop,
+          target:    report.suggestion.target,
+          reportId:  report.id,
+          confirm:   true,
+        }),
+        signal: AbortSignal.timeout(12000),
+      })
+      const body = await r.json()
+      if (!r.ok) setResult({ ok: false, message: body?.error || `HTTP ${r.status}` })
+      else       setResult({ ok: true, id: body.order?.orderId || body.order?.clientOrderId || 'sent' })
+    } catch (err) { setResult({ ok: false, message: err.message }) }
+    finally { setPending(false) }
+  }
+
+  return (
+    <>
+      <button
+        className="btn"
+        style={{ background: '#8b5a2c', color: '#fff', border: '1px solid #a8703a' }}
+        disabled={!canRoute || pending}
+        onClick={() => setAsking(true)}
+      >
+        {pending ? 'ROUTING…' : status?.connected ? 'ROUTE TO BITGET (LIVE)' : 'CONNECT BITGET FIRST →'}
+      </button>
+      {result && (
+        <span style={{ marginLeft: 8, fontSize: 11 }} className={result.ok ? 'up' : 'down'}>
+          {result.ok ? `Bitget order accepted · ${result.id}` : `Order rejected: ${result.message}`}
+        </span>
+      )}
+      {asking && (
+        <div
+          onClick={() => setAsking(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(13,31,22,0.55)', display: 'grid', placeItems: 'center', zIndex: 200, padding: 20 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 480, background: 'var(--bg-elev, #131a15)', color: 'var(--fg)', border: '1px solid var(--edge)', padding: 20, borderRadius: 6 }}
+          >
+            <h3 style={{ margin: '0 0 12px' }}>Route <b>{report.symbol}</b> to Bitget?</h3>
+            <p>This submits a real <b>{report.signal.direction}</b> order for <b>${(report.suggestion.notionalUsd || 0).toLocaleString()}</b> notional on your connected Bitget agent account.</p>
+            <p className="muted" style={{ fontSize: 12 }}>Entry {report.suggestion.entry} · Stop {report.suggestion.stop} · Target {report.suggestion.target}</p>
+            <p className="muted" style={{ fontSize: 12 }}>You can halt every open Bitget order at any time from Settings → Bitget integrations → Kill switch.</p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+              <button className="btn ghost sm" onClick={() => setAsking(false)}>Cancel</button>
+              <button className="btn primary sm" onClick={submitReal}>Route real order</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function ActionSummaryCard({ report, openPosition, isTradable, decide, closeAtMark }) {
   const s = report.signal
   const sug = report.suggestion

@@ -52,6 +52,10 @@ export const FEEDS = [
   { id: 'coindesk',    name: 'CoinDesk',      url: 'https://www.coindesk.com/arc/outboundfeeds/rss', kind: 'crypto' },
   { id: 'theblock',    name: 'The Block',     url: 'https://www.theblock.co/rss.xml',                kind: 'crypto' },
   { id: 'cointelegraph', name: 'CoinTelegraph', url: 'https://cointelegraph.com/rss',                kind: 'crypto' },
+  // Bitget's own announcement RSS — listings, delistings, deposit/withdrawal
+  // suspensions, campaigns. First-party venue signal the crypto majors' RSS
+  // feeds do not cover. Category "venue" so the UI can badge these as native.
+  { id: 'bitget-announce', name: 'Bitget Announcements', url: 'https://www.bitget.com/support/rss', kind: 'venue' },
   { id: 'sec-8k',      name: 'SEC 8-K',       url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&count=40&output=atom', kind: 'equity', ua: SEC_UA },
   { id: 'yahoo-fin',   name: 'Yahoo Finance', url: 'https://finance.yahoo.com/news/rssindex',        kind: 'equity' },
   { id: 'cnbc-top',    name: 'CNBC',          url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114', kind: 'macro' },
@@ -319,8 +323,12 @@ export function makeNewsStore({ llm } = {}) {
       citations: [{ source: feed.name, url: raw.link }],
     }
     const classified = (await llmClassify(item, llm)) || heuristicClassify(item)
-    item.category      = feed.kind === 'insider' ? 'insider' : classified.category
-    item.severity      = feed.kind === 'insider' ? 'MEDIUM' : classified.severity
+    item.category      = feed.kind === 'insider' ? 'insider'
+                       : feed.kind === 'venue'   ? 'exchange'
+                       : classified.category
+    item.severity      = feed.kind === 'insider' ? 'MEDIUM'
+                       : feed.kind === 'venue'   ? (classified.severity || 'MEDIUM')
+                       : classified.severity
     item.regimeShift   = classified.regimeShift
     item.affectedAssets = classified.affectedAssets
     // Per-CIK feeds always target one ticker — override the classifier so the

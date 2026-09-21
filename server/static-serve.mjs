@@ -52,7 +52,7 @@ http.createServer = (handler) => {
 await import('./adapter.mjs')
 http.createServer = originalCreate    // restore
 
-const API_PREFIXES = ['/health', '/metrics', '/bitget', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/assayer', '/analysis', '/errors', '/earnings', '/nightwatch', '/copytrading']
+const API_PREFIXES = ['/health', '/metrics', '/bitget', '/mcp', '/prices', '/news', '/research', '/desk', '/auth', '/session', '/push', '/positioning', '/book', '/marketintel', '/macro', '/signals', '/history', '/backtest', '/share', '/alerts', '/trading', '/copilot', '/vapid', '/paper', '/playbooks', '/assayer', '/analysis', '/errors', '/earnings', '/nightwatch']
 
 function isApi(pathname) { return API_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/')) }
 

@@ -1059,18 +1059,46 @@ function buildStressTests(symbol, market, signal, skills) {
 }
 
 function buildRisks(symbol, market, signal, skills) {
-  const mi = skills.find(s => s.skill === 'market-intel')
+  const mi  = skills.find(s => s.skill === 'market-intel')
   const sen = skills.find(s => s.skill === 'sentiment-analyst')
   const ta  = skills.find(s => s.skill === 'technical-analysis')
+  const nb  = skills.find(s => s.skill === 'news-briefing')
+  const mac = skills.find(s => s.skill === 'macro-analyst')
   const risks = []
-  if (market.volatility === 'HIGH') risks.push({ label: 'Volatility whipsaw', detail: `ATR ${market.atrPct.toFixed(1)}% — 1R stops get taken` })
-  if (mi.data.spreadBps > 8)         risks.push({ label: 'Slippage risk',     detail: `Spread ${mi.data.spreadBps} bps eats edge` })
-  if (sen.data.crowding === 'HIGH')  risks.push({ label: 'Crowding',          detail: `Sentiment score ${sen.data.score} · crowded ${signal.direction.toLowerCase()} tape` })
-  if (market.class === 'crypto')     risks.push({ label: 'BTC dominance',     detail: 'A BTC dump invalidates most alt setups' })
-  if (market.class === 'tokenized-equity') risks.push({ label: 'Cash-open gap', detail: 'Overnight tokenized flow does not always survive the auction' })
-  if (ta.data.rsi > 70)              risks.push({ label: 'Overbought RSI',    detail: `RSI ${ta.data.rsi}` })
-  if (ta.data.rsi < 30)              risks.push({ label: 'Oversold RSI',      detail: `RSI ${ta.data.rsi}` })
-  return risks.slice(0, 5)
+
+  // Structural / microstructure
+  if (market.volatility === 'HIGH')       risks.push({ label: 'Volatility whipsaw', detail: `ATR ${market.atrPct.toFixed(1)}% — 1R stops get taken on noise before the thesis expresses` })
+  if (mi?.data?.spreadBps > 8)            risks.push({ label: 'Slippage risk',      detail: `Spread ${mi.data.spreadBps.toFixed(1)} bps + ${Math.round((mi.data.spreadBps || 0) * 0.05)} bps expected slippage eats a full R at entry + exit` })
+  if (mi?.data?.depthImbalance != null && Math.abs(mi.data.depthImbalance) > 0.15) {
+    const skew = mi.data.depthImbalance > 0 ? 'ask-thin' : 'bid-thin'
+    risks.push({ label: 'Book imbalance', detail: `Depth imbalance ${(mi.data.depthImbalance * 100).toFixed(1)}% · ${skew} — fills at market will skid` })
+  }
+  if (mi?.data?.liquidity === 'LOW')      risks.push({ label: 'Thin liquidity',     detail: `24h notional ${(mi.data.volumeUsd24h || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} — sizing above ~1% of daily volume will move the tape` })
+
+  // Trend / momentum
+  if (ta?.data?.rsi > 70)                 risks.push({ label: 'Overbought RSI',     detail: `RSI ${ta.data.rsi} · fade risk elevated on any macro or headline shock` })
+  if (ta?.data?.rsi < 30)                 risks.push({ label: 'Oversold RSI',       detail: `RSI ${ta.data.rsi} · squeeze risk elevated on any positive catalyst` })
+  if (ta?.data?.trend && signal.direction && signal.direction !== 'FLAT' && ta.data.trend !== 'UP' && signal.direction === 'LONG') risks.push({ label: 'Countertrend long', detail: `TA trend is ${ta.data.trend} — long expressed against the underlying tape direction, wider stop or smaller size warranted` })
+  if (ta?.data?.trend && signal.direction && signal.direction !== 'FLAT' && ta.data.trend !== 'DOWN' && signal.direction === 'SHORT') risks.push({ label: 'Countertrend short', detail: `TA trend is ${ta.data.trend} — short expressed against the underlying tape direction, wider stop or smaller size warranted` })
+
+  // Sentiment / crowd
+  if (sen?.data?.crowding === 'HIGH')     risks.push({ label: 'Crowding',           detail: `Sentiment ${sen.data.tone || ''} · crowded ${signal.direction === 'FLAT' ? 'consensus' : signal.direction.toLowerCase()} tape — reversal risk if a single fund unwinds` })
+
+  // News / catalyst
+  if (nb?.data?.newsCounts?.highSeverity > 0) risks.push({ label: 'High-severity headline in wire', detail: `${nb.data.newsCounts.highSeverity} HIGH-severity item(s) in the current wire — tape can gap on the next print` })
+  if (nb?.data?.newsDirection === 'MIXED' && (nb?.data?.newsCounts?.up || 0) + (nb?.data?.newsCounts?.down || 0) >= 4) risks.push({ label: 'Divided wire', detail: `${nb.data.newsCounts.up} bullish vs ${nb.data.newsCounts.down} bearish headlines — no clean bias; risk-of-whipsaw high` })
+
+  // Macro / cross-asset
+  if (mac?.data?.riskRegime === 'RISK-OFF' && signal.direction === 'LONG')  risks.push({ label: 'Macro against long', detail: 'Cross-asset regime is RISK-OFF (DXY up / VIX up / BTC down) — beta trades bleed against the tide' })
+  if (mac?.data?.riskRegime === 'RISK-ON'  && signal.direction === 'SHORT') risks.push({ label: 'Macro against short', detail: 'Cross-asset regime is RISK-ON — shorting into a bid tape is a size-down environment' })
+
+  // Structural venue risks (asset class)
+  if (market.class === 'crypto')             risks.push({ label: 'BTC dominance',      detail: 'A BTC dump invalidates most alt setups within minutes — halve position on any 2%+ intra-hour BTC move' })
+  if (market.class === 'tokenized-equity')   risks.push({ label: 'Cash-open gap',      detail: 'Overnight R-pair flow can gap 1–3% at the underlying cash open — sized exits or a hard stop before 09:30 ET recommended' })
+
+  // Deduplicate labels, cap at 8 so the section stays legible.
+  const seen = new Set()
+  return risks.filter(r => (seen.has(r.label) ? false : (seen.add(r.label), true))).slice(0, 8)
 }
 
 function suggestExecution({ symbol, market, signal, memory, invalidation }) {
@@ -1095,8 +1123,8 @@ function suggestExecution({ symbol, market, signal, memory, invalidation }) {
     target: Number(target.toFixed(2)),
     riskReward: Number((targetPct / Math.max(0.005, stopPct)).toFixed(2)),
     slices: [
-      { pct: 0.6, condition: 'Initial · limit at ±5 bps' },
-      { pct: 0.4, condition: 'Trailing add-on if signal composite improves within 15m' },
+      { pct: 0.6, condition: 'Initial · limit at ±5 bps from mark, GTC 15m' },
+      { pct: 0.4, condition: 'Trailing add-on if 15m composite improves and price holds > entry' },
     ],
     estimatedFriction: {
       feesBps,
@@ -1104,10 +1132,16 @@ function suggestExecution({ symbol, market, signal, memory, invalidation }) {
       totalPct: Number(((feesBps + Math.round(stopPct * 10000 * 0.05)) / 10000).toFixed(4)),
     },
     horizon: signal.horizon,
+    // Detailed management guidance — sizing rationale, order type, stop
+    // discipline, partial-take rule, and time-in-force. Turns the raw plan
+    // into a runbook rather than a set of orphan numbers.
     notes: [
-      `Position size sized off ${prefs.maxPositionPct ? (prefs.maxPositionPct * 100).toFixed(0) + '% paper-capital cap' : '15% paper-capital cap'} and ~1% risk-per-trade.`,
-      `Target set at ${targetMultiple.toFixed(1)}× stop distance for your ${horizonPref ? horizonPref.toLowerCase() : 'swing'} horizon.`,
-      'You decide. NIGHTWATCH will not fill without your explicit approve.',
+      `Sizing · ${prefs.maxPositionPct ? (prefs.maxPositionPct * 100).toFixed(0) + '% NAV cap' : '15% NAV cap'} + ~1% risk-per-trade — resulting size is $${notional.toLocaleString()} (${(notional / nav * 100).toFixed(1)}% NAV) so a stop-out costs ≈ $${Math.round(notional * stopPct).toLocaleString()} (~${(stopPct * 100).toFixed(2)}% of position).`,
+      `Order type · start with a limit at ±5 bps to avoid crossing on the ${feesBps} bps taker; if unfilled after 15m, cancel and re-solicit — no market-in on a mixed wire.`,
+      `Stop discipline · hard stop at $${Number((invalidation.price || (signal.direction === 'LONG' ? market.price * (1 - stopPct) : market.price * (1 + stopPct)))).toFixed(2)} on ${market.class === 'crypto' ? 'the Bitget spot book' : 'the R-pair close'}, no bleed-through — invalidation was chosen to sit just outside the ${signal.direction === 'LONG' ? 'nearest structural support' : 'nearest structural resistance'}.`,
+      `Take-profit ladder · scale out 40% at 1R, 40% at 2R, trail the remaining 20% by 1× ATR from the running high${signal.direction === 'SHORT' ? '/low' : ''} — locks in the ${targetMultiple.toFixed(1)}× R:R without giving the tape a chance to fully reverse.`,
+      `Time-in-force · ${horizonPref === 'INTRADAY' ? 'flat by session close · re-establish next day if thesis intact' : horizonPref === 'POSITION' ? 'position trade — expect 2-6 weeks; re-check after every earnings/FOMC print' : 'swing trade — hold 3-10 sessions; exit into the next scheduled catalyst window'}.`,
+      'Human-in-the-loop · NIGHTWATCH will not route to Bitget without your explicit per-order Approve. Kill switch cancels every open Agentic Account order in one click.',
     ],
   }
 }

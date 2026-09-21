@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
-  CalendarClock, ChevronRight, Copy, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
+  CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldAlert, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
@@ -913,6 +913,198 @@ function UnsupportedAssetCard({ ask, onDismiss, onPickSymbol }) {
   )
 }
 
+/* ---------------------------------------- report-body deepening components */
+
+/**
+ * Compact grid of regime chips — trend, volatility, sentiment, cross-asset,
+ * flow, wire bias — pulled directly from the five skills' raw data. Gives
+ * the reader a one-glance picture of every dimension the desk analyzed
+ * before diving into the prose sections below.
+ */
+function RegimeSignalsGrid({ report }) {
+  const skills = report.skills || []
+  const ta  = skills.find(s => s.skill === 'technical-analysis')?.data || {}
+  const mi  = skills.find(s => s.skill === 'market-intel')?.data || {}
+  const sen = skills.find(s => s.skill === 'sentiment-analyst')?.data || {}
+  const mac = skills.find(s => s.skill === 'macro-analyst')?.data || {}
+  const nb  = skills.find(s => s.skill === 'news-briefing')?.data  || {}
+
+  const rowStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, padding: '12px 16px', border: '1px solid var(--edge)', borderRadius: 6, marginBottom: 12, background: 'rgba(255,255,255,0.02)' }
+  const chipStyle = (tone) => ({
+    display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 10px',
+    borderLeft: `2px solid ${tone === 'up' ? '#4caf7a' : tone === 'down' ? '#c96060' : tone === 'warn' ? '#c9a56a' : '#5c7f96'}`,
+    background: 'rgba(0,0,0,0.15)',
+  })
+  const label = (t) => <small style={{ fontSize: 9, letterSpacing: 0.4, opacity: 0.65, textTransform: 'uppercase' }}>{t}</small>
+  const value = (t) => <b style={{ fontSize: 12 }}>{t}</b>
+  const trendTone   = ta.trend === 'UP' ? 'up' : ta.trend === 'DOWN' ? 'down' : 'neutral'
+  const volTone     = (ta.atrPct || 0) >= 2 ? 'warn' : 'neutral'
+  const flowTone    = (mi.volumeZ || 0) >= 1 ? 'up' : (mi.volumeZ || 0) <= -1 ? 'down' : 'neutral'
+  const spreadTone  = (mi.spreadBps || 0) > 8 ? 'warn' : 'neutral'
+  const senTone     = sen.tone === 'POSITIVE' ? 'up' : sen.tone === 'NEGATIVE' ? 'down' : 'neutral'
+  const macTone     = mac.riskRegime === 'RISK-ON' ? 'up' : mac.riskRegime === 'RISK-OFF' ? 'down' : 'neutral'
+  const wireTone    = nb.newsDirection === 'UP' ? 'up' : nb.newsDirection === 'DOWN' ? 'down' : 'neutral'
+
+  return (
+    <div style={rowStyle}>
+      <div style={chipStyle(trendTone)}>
+        {label('Trend regime')}
+        {value(ta.trend ? `${ta.trend} · RSI ${ta.rsi ?? '—'}` : '—')}
+      </div>
+      <div style={chipStyle(volTone)}>
+        {label('Volatility')}
+        {value(ta.atrPct != null ? `ATR ${ta.atrPct.toFixed(1)}%` : '—')}
+      </div>
+      <div style={chipStyle(spreadTone)}>
+        {label('Microstructure')}
+        {value(mi.spreadBps != null ? `${mi.spreadBps.toFixed(1)} bps · ${mi.liquidity || '—'}` : '—')}
+      </div>
+      <div style={chipStyle(flowTone)}>
+        {label('Flow')}
+        {value(mi.volumeZ != null ? `Vol z ${mi.volumeZ.toFixed(2)}${mi.depthImbalance != null ? ` · imb ${(mi.depthImbalance * 100).toFixed(1)}%` : ''}` : '—')}
+      </div>
+      <div style={chipStyle(senTone)}>
+        {label('Sentiment')}
+        {value(sen.tone ? `${sen.tone} · ${sen.crowding || '—'} crowd` : '—')}
+      </div>
+      <div style={chipStyle(macTone)}>
+        {label('Cross-asset')}
+        {value(mac.riskRegime ? `${mac.riskRegime}${mac.dxy != null ? ` · DXY ${mac.dxy.toFixed(1)}` : ''}` : '—')}
+      </div>
+      <div style={chipStyle(wireTone)}>
+        {label('Wire bias')}
+        {value(nb.newsDirection ? `${nb.newsDirection} · ${(nb.newsCounts?.up || 0)}▲/${(nb.newsCounts?.down || 0)}▼/${(nb.newsCounts?.mixed || 0)}=` : '—')}
+      </div>
+      {ta.support != null && ta.resistance != null && (
+        <div style={chipStyle('neutral')}>
+          {label('Range')}
+          {value(`$${fmtPrice(ta.support)} — $${fmtPrice(ta.resistance)}`)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Skills-breakdown table — one row per Bitget signal skill with confidence
+ * bar + one-line takeaway + source list. Answers "which skill said what and
+ * how much do we trust each" in one glance.
+ */
+function SkillBreakdownTable({ report }) {
+  const skills = report.skills || []
+  if (!skills.length) return null
+  return (
+    <div style={{ border: '1px solid var(--edge)', borderRadius: 6, marginBottom: 12, background: 'rgba(255,255,255,0.02)', overflow: 'hidden' }}>
+      <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--edge)' }}>
+        <Cpu size={12} />
+        <small style={{ fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', opacity: 0.75 }}>Skill breakdown — what each Bitget research skill returned</small>
+      </div>
+      <div>
+        {skills.map((s, i) => {
+          const conf = Math.round((s.confidence || 0) * 100)
+          const tone = conf >= 70 ? '#4caf7a' : conf >= 40 ? '#c9a56a' : '#c96060'
+          return (
+            <div key={s.skill} style={{
+              display: 'grid', gridTemplateColumns: '160px 60px 1fr', gap: 12,
+              padding: '8px 16px', alignItems: 'center',
+              borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+            }}>
+              <div>
+                <b style={{ fontSize: 11 }}>{s.skill}</b>
+                <div style={{ fontSize: 9, opacity: 0.5, marginTop: 2 }}>{s.source || '—'}</div>
+              </div>
+              <div style={{ position: 'relative', height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${conf}%`, background: tone }} />
+                <div style={{ position: 'absolute', right: -32, top: -3, fontSize: 9 }}>{conf}%</div>
+              </div>
+              <div style={{ fontSize: 11 }}>
+                <b style={{ display: 'block', fontSize: 11, marginBottom: 2 }}>{s.title || '—'}</b>
+                <span style={{ opacity: 0.75 }}>{s.excerpt || '—'}</span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Catalyst section — the single top signal driver, plus the wire's supporting
+ * cast (up/down/mixed counts + top 3 secondary headlines with direction and
+ * magnitude read).
+ */
+function CatalystSection({ report }) {
+  const s = report.signal
+  const nb = report.skills?.find(x => x.skill === 'news-briefing')?.data || {}
+  const counts = nb.newsCounts || { up: 0, down: 0, mixed: 0, highSeverity: 0 }
+  const primary = nb.newsItems?.[0]
+  const keyPoints = (nb.keyPoints || []).slice(0, 4)
+  return (
+    <Section title="Catalyst" icon={<Sparkles size={13} />}>
+      <p style={{ margin: '0 0 8px', fontWeight: 500 }}>{s.catalyst || 'No single dominant catalyst — desk is reading the composite.'}</p>
+      {primary && (
+        <div style={{ fontSize: 11, padding: '6px 10px', background: 'rgba(0,0,0,0.15)', borderRadius: 4, marginBottom: 8 }}>
+          <b style={{ display: 'block', marginBottom: 2 }}>Primary print</b>
+          <a href={safeUrl(primary.url)} target="_blank" rel="noreferrer noopener" style={{ display: 'block', marginBottom: 2 }}>{primary.headline}</a>
+          <em style={{ opacity: 0.7 }}>{primary.source} · {String(primary.publishedAt || '').slice(5, 16).replace('T', ' ')} UTC · {primary.direction}{primary.severity === 'HIGH' ? ' · HIGH SEV' : ''}</em>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 12, fontSize: 11, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span className="up">▲ {counts.up} bullish</span>
+        <span className="down">▼ {counts.down} bearish</span>
+        <span style={{ opacity: 0.7 }}>= {counts.mixed} mixed</span>
+        {counts.highSeverity > 0 && <span className="down">! {counts.highSeverity} HIGH sev</span>}
+        {nb.expectationGap && <span style={{ opacity: 0.7 }}>· {nb.expectationGap}</span>}
+      </div>
+      {keyPoints.length > 1 && (
+        <div>
+          <small style={{ fontSize: 10, opacity: 0.65, letterSpacing: 0.3, textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Supporting cast</small>
+          <ul className="dense" style={{ fontSize: 11 }}>
+            {keyPoints.slice(1).map((kp, i) => <li key={i}>{kp}</li>)}
+          </ul>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+/**
+ * Live wire tape — rich item cards with tagged assets, relevance, category,
+ * and the desk's per-headline rationale (why this touches the trader's book).
+ */
+function LiveWireTapeSection({ report }) {
+  const nb = report.skills?.find(x => x.skill === 'news-briefing')?.data || {}
+  const items = nb.newsItems || []
+  if (!items.length) return null
+  return (
+    <Section title="Live wire tape" icon={<Newspaper size={13} />}>
+      <ul className="dense" style={{ fontSize: 11 }}>
+        {items.map((n, i) => {
+          const tone = n.direction === 'UP' ? 'up' : n.direction === 'DOWN' ? 'down' : ''
+          const tags = Array.isArray(n.affectedAssets) ? n.affectedAssets.slice(0, 4) : []
+          return (
+            <li key={i} style={{ padding: '4px 0', borderBottom: i < items.length - 1 ? '1px dashed rgba(255,255,255,0.05)' : 'none' }}>
+              <a href={safeUrl(n.url)} target="_blank" rel="noreferrer noopener">{n.headline}</a>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2, alignItems: 'center' }}>
+                <em style={{ opacity: 0.7 }}>{n.source} · {String(n.publishedAt || '').slice(5, 16).replace('T', ' ')} UTC</em>
+                {n.direction && <span className={tone} style={{ fontSize: 9, fontWeight: 700 }}>{n.direction}</span>}
+                {n.severity === 'HIGH' && <span className="down" style={{ fontSize: 9, fontWeight: 700 }}>HIGH SEV</span>}
+                {n.category && <span style={{ fontSize: 9, opacity: 0.6, textTransform: 'uppercase', letterSpacing: 0.3 }}>{n.category}</span>}
+                {tags.map(t => (
+                  <span key={t.symbol || t} style={{ fontSize: 9, padding: '1px 5px', border: '1px solid var(--edge)', borderRadius: 2 }}>
+                    {t.symbol || t}{t.magnitude != null ? ` ${(t.magnitude * 100).toFixed(0)}%` : ''}
+                  </span>
+                ))}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </Section>
+  )
+}
+
 function ResearchReportView({ report, decide, session, closeAtMark }) {
   const s = report.signal
   const openPosition = session.positions.find(p => p.status === 'OPEN' && p.asset === report.symbol)
@@ -958,28 +1150,12 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
         <Metric label="Horizon" value={s.horizon.replace(/_/g, ' ').toLowerCase()} />
       </div>
 
-      <div className="report-grid">
-        <Section title="Catalyst" icon={<Sparkles size={13} />}>
-          <p>{s.catalyst}</p>
-        </Section>
+      <RegimeSignalsGrid report={report} />
+      <SkillBreakdownTable report={report} />
 
-        {(() => {
-          const nb = report.skills?.find(x => x.skill === 'news-briefing')
-          const items = nb?.data?.newsItems
-          if (!items?.length) return null
-          return (
-            <Section title="Live wire tape" icon={<Newspaper size={13} />}>
-              <ul className="dense">
-                {items.map((n, i) => (
-                  <li key={i}>
-                    <a href={safeUrl(n.url)} target="_blank" rel="noreferrer noopener">{n.headline}</a>
-                    <em>{n.source} · {String(n.publishedAt || '').slice(5, 16).replace('T', ' ')} UTC · {n.direction}{n.severity === 'HIGH' ? ' · HIGH SEV' : ''}</em>
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )
-        })()}
+      <div className="report-grid">
+        <CatalystSection report={report} />
+        <LiveWireTapeSection report={report} />
 
         <Section title="Supporting evidence" icon={<ArrowUpRight size={13} />} tone="green">
           <ul>
@@ -1044,7 +1220,9 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
               <span key={i}>{Math.round(sl.pct * 100)}% · {sl.condition}</span>
             ))}
           </div>
-          <p className="note">{report.suggestion.notes.join(' ')}</p>
+          <ul className="dense" style={{ fontSize: 11, marginTop: 8, paddingLeft: 16 }}>
+            {report.suggestion.notes.map((n, i) => <li key={i} style={{ marginBottom: 4 }}>{n}</li>)}
+          </ul>
           <div className="report-actions">
             {isTradable && <button className="btn primary" onClick={() => decide('APPROVE')}>APPROVE PAPER TRADE</button>}
             {isTradable && <RouteToBitgetButton report={report} />}
@@ -1123,7 +1301,7 @@ function SignalsPage({ session, activeArtifact, onAsk }) {
   return (
     <div className="page">
       <PageHead title="Signals" eyebrow={<><Radio size={12} /> ALL GENERATED SIGNALS</>}>
-        <button className="btn primary sm" onClick={() => onAsk('Find the strongest overnight opportunities across my watchlist.')}><Zap size={13} /> SCAN NOW</button>
+        <button className="btn primary sm" onClick={() => onAsk('Rank my watchlist symbols by strongest 24h signal.')}><Zap size={13} /> SCAN NOW</button>
       </PageHead>
       {opportunities ? (
         <div className="panel">

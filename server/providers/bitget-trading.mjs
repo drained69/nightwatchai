@@ -1,11 +1,11 @@
 /**
- * Bitget Agentic Account routing.
+ * Bitget Agentic Account routing (UTA v3).
  *
  * Backs the Agent Hub OAuth flow: the operator authorizes their Agentic
  * Account (a dedicated agent-only sub-account isolated from their main funds
  * and capped by Agent Hub daily limits), then approved research reports can
- * be routed there as real orders — one at a time, each with explicit
- * per-order confirm.
+ * be routed there as real orders through the Unified Trading Account (UTA
+ * v3) API — one at a time, each with explicit per-order confirm.
  *
  * OAuth flow:
  *   1. SPA → /auth/oauth/bitget/start → redirect to Agent Hub authorize URL

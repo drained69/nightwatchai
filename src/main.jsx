@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
-  CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
+  CalendarClock, ChevronRight, Copy, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
   Search, Send, Settings, ShieldAlert, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
@@ -50,7 +50,7 @@ import {
   DemoMarketData, NightwatchProvider, PaperExecution,
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
-  fmtPct, fmtPrice, foldReviewIntoMemory, ingestNewsItem, initialSession, loadSession, nowClock,
+  fmtPct, fmtPrice, foldReviewIntoMemory, inferAsset, ingestNewsItem, initialSession, loadSession, nowClock,
   pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
   uncoveredAssetCandidates,
 } from './domain'
@@ -632,7 +632,6 @@ function App({ authUser: signedInUser, onSignedOut }) {
               })}
             </div>
           </div>
-          <div className="hint"><Cpu size={11} /> {session.provider.engine} · {session.reports?.length || 0} reports</div>
           {authUser && (
             <div className="account-strip" role="group" aria-label="Account">
               <div className="account-avatar" aria-hidden="true">
@@ -718,12 +717,113 @@ function App({ authUser: signedInUser, onSignedOut }) {
 
 /* --------------------------------------------------- Research page (hero) */
 
+/**
+ * Maps each local research skill to a Bitget Signal MCP tool + its argument
+ * template. When the trader hits "RUN MCP" on a chip, we invoke this exact
+ * tool on Bitget's hosted signal MCP (datahub.noxiaohao.com/mcp) — the same
+ * one the official `@bitget-ai/bitget-signal` package registers.
+ *
+ * `argsFor(symbol)` returns the invocation payload. For crypto majors we pass
+ * the pair through; for tokenized R-equities the underlying isn't on the
+ * generic exchanges the MCP checks, so we fall back to BTC/USDT for
+ * chart-based tools and to a keyword filter for news.
+ */
+const CRYPTO_SET = new Set(['BTC','ETH','SOL','BNB','XRP','DOGE','AVAX','ADA'])
+const SKILL_TO_MCP = {
+  'news-briefing':      { tool: 'news_feed',             argsFor: (sym) => ({ action: 'latest', keyword: sym, limit: 5 }) },
+  'market-intel':       { tool: 'derivatives_sentiment', argsFor: (sym) => ({ action: 'long_short', symbol: (CRYPTO_SET.has(sym) ? `${sym}USDT` : 'BTCUSDT'), period: '4h', limit: 12 }) },
+  'technical-analysis': { tool: 'technical_analysis',    argsFor: (sym) => ({ action: 'full_analysis', symbol: (CRYPTO_SET.has(sym) ? `${sym}/USDT` : 'BTC/USDT'), timeframe: '4h', period: 14 }) },
+  'sentiment-analyst':  { tool: 'sentiment_index',       argsFor: ()    => ({ action: 'current' }) },
+  'macro-analyst':      { tool: 'macro_indicators',      argsFor: ()    => ({ action: 'multi_indicator', indicators: 'cpi,fed_funds,unemployment,gdp_growth', limit: 3 }) },
+}
+
+/**
+ * Extract the textual payload from an MCP tools/call response. Bitget's MCP
+ * returns { content: [{type:'text', text:'…'}] }; we take the first text
+ * block, try to pretty-print JSON if it parses, else return raw text.
+ */
+function extractMcpText(result) {
+  const first = result?.content?.[0]
+  if (!first) return 'No content returned.'
+  const raw = first.text ?? (typeof first === 'string' ? first : JSON.stringify(first))
+  try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return raw }
+}
+
+function SkillChip({ spec, done, inFlight, symbol }) {
+  const [mcpBusy, setMcpBusy] = useState(false)
+  const [mcpOut, setMcpOut] = useState(null)   // { ok, text, at, tool, args }
+  const mapping = SKILL_TO_MCP[spec.id]
+  const canRunMcp = Boolean(mapping)
+
+  const runMcp = async () => {
+    if (!canRunMcp || !hasApi()) return
+    const args = mapping.argsFor(String(symbol || 'BTC').toUpperCase())
+    setMcpBusy(true); setMcpOut(null)
+    try {
+      const r = await fetch(apiUrl('/mcp/call'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: mapping.tool, arguments: args }),
+        signal: AbortSignal.timeout(50000),
+      })
+      const body = await r.json()
+      if (!r.ok || !body?.ok) {
+        setMcpOut({ ok: false, text: body?.error || `HTTP ${r.status}`, at: Date.now(), tool: mapping.tool, args })
+      } else {
+        setMcpOut({ ok: true, text: extractMcpText(body.result), at: Date.now(), tool: mapping.tool, args })
+      }
+    } catch (err) {
+      setMcpOut({ ok: false, text: err.message, at: Date.now(), tool: mapping.tool, args })
+    } finally { setMcpBusy(false) }
+  }
+
+  return (
+    <div className={done ? 'skill on' : inFlight ? 'skill wait' : 'skill'}>
+      <div className="skill-head">
+        <small>{spec.id}</small>
+        {done ? <em>{Math.round(done.confidence * 100)}%</em> : inFlight ? <em className="wait">gathering…</em> : <em className="idle">ready</em>}
+      </div>
+      <b>{done ? done.title : spec.label}</b>
+      <span>{done ? done.excerpt : spec.purpose}</span>
+      {canRunMcp && (
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            className="btn ghost sm"
+            style={{ padding: '2px 8px', fontSize: 10, letterSpacing: 0.3 }}
+            onClick={runMcp}
+            disabled={mcpBusy}
+            title={`Invoke Bitget Signal MCP tool: ${mapping.tool}`}
+          >
+            {mcpBusy ? 'MCP · CALLING…' : mcpOut ? 'MCP · RE-RUN' : `MCP · RUN ${mapping.tool}`}
+          </button>
+          {mcpOut?.ok && <span className="pill green mini" style={{ fontSize: 9 }}>OK</span>}
+          {mcpOut && !mcpOut.ok && <span className="pill amber mini" style={{ fontSize: 9 }}>ERR</span>}
+        </div>
+      )}
+      {mcpOut && (
+        <pre style={{
+          marginTop: 8, background: 'rgba(0,0,0,0.25)', border: '1px solid var(--edge)',
+          borderRadius: 4, padding: 8, fontSize: 10, lineHeight: 1.4,
+          maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          color: mcpOut.ok ? 'var(--fg)' : '#f0a97a',
+        }}>
+{mcpOut.text}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 function ResearchPage({ command, setCommand, submit, running, session, liveTrace, activeReport, decide, closeAtMark, activeArtifact, unsupportedAsk, dismissUnsupported }) {
   const skillState = BITGET_SIGNAL_SKILLS.map((spec, idx) => {
     const done = liveTrace.find(t => t.skill === spec.id)
     const inFlight = running && !done && liveTrace.length >= idx
     return { spec, done, inFlight }
   })
+  // Resolved symbol for MCP calls that need one: active report > current
+  // command input > default BTC. Kept live so a fresh command types the
+  // right symbol into the next MCP call without a re-render dance.
+  const mcpSymbol = activeReport?.symbol || inferAsset(command || '') || 'BTC'
   return (
     <div className="page">
       <section className="hero">
@@ -756,14 +856,7 @@ function ResearchPage({ command, setCommand, submit, running, session, liveTrace
 
       <section className="skill-rail">
         {skillState.map(({ spec, done, inFlight }) => (
-          <div key={spec.id} className={done ? 'skill on' : inFlight ? 'skill wait' : 'skill'}>
-            <div className="skill-head">
-              <small>{spec.id}</small>
-              {done ? <em>{Math.round(done.confidence * 100)}%</em> : inFlight ? <em className="wait">gathering…</em> : <em className="idle">ready</em>}
-            </div>
-            <b>{done ? done.title : spec.label}</b>
-            <span>{done ? done.excerpt : spec.purpose}</span>
-          </div>
+          <SkillChip key={spec.id} spec={spec} done={done} inFlight={inFlight} symbol={mcpSymbol} />
         ))}
       </section>
 
@@ -1525,7 +1618,7 @@ function NewsPage({ session, setSession, onAsk }) {
 
       {feed.length === 0
         ? <div className="empty-report"><div className="empty-icon"><Newspaper size={22} /></div><b>No news matches this filter</b><p>Change the filter, or wait — the tape ticks a new item every 45 seconds.</p></div>
-        : feed.map(item => <NewsCard key={item.id + item.publishedAt} item={item} onAsk={onAsk} />)
+        : feed.map((item, i) => <NewsCard key={item.id || `${item.headline}-${i}`} item={item} onAsk={onAsk} />)
       }
     </div>
   )
@@ -1788,7 +1881,7 @@ function BitgetIntegrationsPanel() {
 
   return (
     <div className="panel">
-      <div className="panel-head"><h3>Bitget integrations</h3><small>MCP · WS · Agentic Account</small></div>
+      <div className="panel-head"><h3>Bitget integrations</h3><small>Signal MCP · Public WS · Agentic Account (UTA v3)</small></div>
       <div className="settings-body">
         <div className="kv-row">
           <span>Signal MCP</span>
@@ -1836,9 +1929,9 @@ function BitgetIntegrationsPanel() {
         )}
 
         <p className="settings-note" style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5 }}>
-          Live routing goes to your Bitget <b>Agentic Account</b> only — a dedicated Agent Hub sub-account isolated from your main funds,
-          capped by the daily limits you set on Agent Hub, and revocable one-click via the kill switch. Nothing routes without your
-          per-order approval.
+          Live routing goes through Bitget's <b>Unified Trading Account (UTA v3)</b> API into your <b>Agentic Account</b> only —
+          a dedicated Agent Hub sub-account isolated from your main funds, capped by the daily limits you set on Agent Hub,
+          and revocable one-click via the kill switch. Nothing routes without your per-order approval.
         </p>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
@@ -2127,7 +2220,7 @@ function RouteToBitgetButton({ report }) {
             style={{ maxWidth: 480, background: 'var(--bg-elev, #131a15)', color: 'var(--fg)', border: '1px solid var(--edge)', padding: 20, borderRadius: 6 }}
           >
             <h3 style={{ margin: '0 0 12px' }}>Route <b>{report.symbol}</b> to your Agentic Account?</h3>
-            <p>This submits a real <b>{report.signal.direction}</b> order for <b>${(report.suggestion.notionalUsd || 0).toLocaleString()}</b> notional to your <b>Bitget Agentic Account</b> — the isolated Agent Hub sub-account you authorized, not your main funds.</p>
+            <p>This submits a real <b>{report.signal.direction}</b> order for <b>${(report.suggestion.notionalUsd || 0).toLocaleString()}</b> notional via Bitget's <b>UTA v3</b> API into your <b>Agentic Account</b> — the isolated Agent Hub sub-account you authorized, not your main funds.</p>
             <p className="muted" style={{ fontSize: 12 }}>Entry {report.suggestion.entry} · Stop {report.suggestion.stop} · Target {report.suggestion.target}</p>
             <p className="muted" style={{ fontSize: 12 }}>You can halt every open order and revoke authorization at any time from Settings → Bitget integrations → Kill switch.</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>

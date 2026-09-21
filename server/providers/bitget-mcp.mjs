@@ -22,7 +22,7 @@ import { logger } from '../lib/log.mjs'
 const MCP_URL = process.env.BITGET_MCP_URL || 'https://datahub.noxiaohao.com/mcp'
 const MCP_ENABLED = process.env.BITGET_MCP_ENABLED !== '0'
 const HANDSHAKE_TIMEOUT_MS = Number(process.env.BITGET_MCP_HANDSHAKE_TIMEOUT_MS || 12_000)
-const CALL_TIMEOUT_MS      = Number(process.env.BITGET_MCP_CALL_TIMEOUT_MS      || 30_000)
+const CALL_TIMEOUT_MS      = Number(process.env.BITGET_MCP_CALL_TIMEOUT_MS      || 45_000)
 const REFRESH_INTERVAL_MS  = Number(process.env.BITGET_MCP_REFRESH_MS           || 15 * 60_000)
 
 const CLIENT_INFO = { name: 'nightwatch-ai', version: '1.2.0' }
@@ -141,20 +141,28 @@ export function stopBitgetMcp() {
   state.sessionId = null
 }
 
-/** Invoke a tool by name. Returns { ok, result, error }. */
+/** Invoke a tool by name. Returns { ok, result, error }. Never throws. */
 export async function callMcpTool(name, args = {}) {
   if (!MCP_ENABLED) return { ok: false, error: 'MCP disabled' }
   if (!(await ensureSession())) return { ok: false, error: state.lastHandshakeError || 'no session' }
-  const res = await post({
-    jsonrpc: '2.0',
-    id: state.nextRequestId++,
-    method: 'tools/call',
-    params: { name, arguments: args },
-  }, { sessionId: state.sessionId })
+  let res
+  try {
+    res = await post({
+      jsonrpc: '2.0',
+      id: state.nextRequestId++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    }, { sessionId: state.sessionId })
+  } catch (err) {
+    // Timeouts and transport errors surface here. Invalidate the session so
+    // the next call re-handshakes; the hosted MCP occasionally kills sessions
+    // after long-running tool calls.
+    state.sessionId = null
+    return { ok: false, error: err.message || String(err) }
+  }
   state.lastCallAt = Date.now()
   if (!res.ok || res.body?.error) {
     const err = res.body?.error?.message || `HTTP ${res.status}`
-    // Session may have expired — invalidate so the next call re-handshakes.
     if (res.status === 400 || res.status === 404) state.sessionId = null
     return { ok: false, error: err }
   }

@@ -1860,6 +1860,13 @@ export function ingestNewsItem(session, newsItem) {
     ingestedAt: new Date().toISOString(),
     isSimulated: newsItem.isSimulated === true,
   }
+  // Idempotent by id: SSE frequently redelivers the same item after a REST
+  // hydrate has already loaded it (or a reconnect burst repeats the last few
+  // headlines). Prepending a duplicate would create React "same key" warnings
+  // in the news list and pollute the alerts panel. If the id already exists,
+  // return the session unchanged.
+  const existing = (session.news || []).find(n => n && n.id === stamped.id)
+  if (existing) return session
   const analysis = analyzeNewsForUser(stamped, session)
   const alerts = analysis.relevanceTier === 'HIGH' || (analysis.positionsTouched > 0 && stamped.severity === 'HIGH')
     ? [analysis, ...(session.newsAlerts || [])].slice(0, 20)

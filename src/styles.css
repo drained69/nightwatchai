@@ -562,6 +562,12 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   padding: 8px 10px; font: 500 11px 'IBM Plex Mono'; border-radius: 0;
 }
 .settings-grid input:focus, .settings-grid select:focus { outline: none; border-color: var(--accent) }
+.settings-grid .field-hint { font: 400 10px/1.5 'IBM Plex Mono'; color: var(--muted); margin-top: 2px }
+.settings-note { padding: 0 24px 6px; font: 400 12px/1.6 'IBM Plex Mono'; color: var(--text-2) }
+.settings-details { padding: 6px 0 0 }
+.settings-details summary { cursor: pointer; font: 600 10px 'IBM Plex Mono'; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); padding: 6px 0 }
+.settings-details summary:hover { color: var(--text) }
+.settings-details .steps { margin-top: 8px }
 .watch-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 24px }
 .watch-tag {
   display: inline-flex; align-items: center; gap: 6px;

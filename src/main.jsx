@@ -629,7 +629,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
         {page === 'portfolio' && <PortfolioPage session={session} activeArtifact={activeArtifact} closeAtMark={closeAtMark} setCommand={setCommand} submit={submit} />}
         {page === 'backtest'  && <BacktestPage session={session} />}
         {page === 'history'   && <HistoryPage session={session} activeArtifact={activeArtifact} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
-        {page === 'settings'  && <SettingsPage session={session} setSession={setSession} bitgetStatus={bitgetStatus} onReset={resetSession} />}
+        {page === 'settings'  && <SettingsPage session={session} setSession={setSession} bitgetStatus={bitgetStatus} onReset={resetSession} user={authUser} setPage={setPage} />}
         {page === 'assayer'   && (
           authUser
             ? <AssayerPage user={authUser} onAllocated={() => setPage('portfolio')} />
@@ -1641,80 +1641,149 @@ function BacktestPage({ session }) {
 
 /* ------------------------------------------------------- Settings page */
 
-function SettingsPage({ session, setSession, bitgetStatus, onReset }) {
+const RISK_OPTIONS    = [['CONSERVATIVE', 'Conservative'], ['MODERATE', 'Moderate'], ['AGGRESSIVE', 'Aggressive']]
+const STYLE_OPTIONS   = [['EVENT_DRIVEN', 'Event-driven'], ['TREND_FOLLOW', 'Trend-following'], ['MEAN_REVERT', 'Mean reversion'], ['MACRO', 'Macro']]
+const HORIZON_OPTIONS = [['INTRADAY', 'Intraday'], ['SWING', 'Swing (days to weeks)'], ['POSITION', 'Position (weeks to months)']]
+
+function SettingsPage({ session, setSession, bitgetStatus, onReset, user, setPage }) {
   const prefs = session.memory.preferences
   const setPref = (key, value) => setSession(s => ({ ...s, memory: { ...s.memory, preferences: { ...s.memory.preferences, [key]: value } } }))
   // Clamp numeric prefs on change: raw Number('') is NaN, which JSON-serializes
   // to null and silently corrupts stored preferences; out-of-range values break
   // signal gating and position sizing.
-  const setNumPref = (key, raw, min, max, fallback) => {
+  const setNumPref = (key, raw, min, max) => {
     const n = Number(raw)
     if (raw === '' || !Number.isFinite(n)) return
     setPref(key, Math.min(max, Math.max(min, n)))
   }
+  // Percent inputs: user types 60, stored as 0.6.
+  const setPctPref = (key, raw, minPct, maxPct) => {
+    const n = Number(raw)
+    if (raw === '' || !Number.isFinite(n)) return
+    setPref(key, Math.min(maxPct, Math.max(minPct, n)) / 100)
+  }
+  const setBpsPref = (key, raw, minBps, maxBps) => {
+    const n = Number(raw)
+    if (raw === '' || !Number.isFinite(n)) return
+    setPref(key, Math.min(maxBps, Math.max(minBps, n)) / 10000)
+  }
+  const confirmReset = () => {
+    if (window.confirm('Reset your local session? Watchlist, research reports, theses and paper-book positions on this device will be cleared. Your account and its saved playbooks are unaffected.')) onReset()
+  }
   return (
     <div className="page">
-      <PageHead title="Settings" eyebrow={<><Settings size={12} /> RESEARCH PREFERENCES · INTEGRATIONS</>} />
+      <PageHead title="Settings" eyebrow={<><Settings size={12} /> ACCOUNT · PREFERENCES · INTEGRATIONS</>} />
 
-      <div className="panel">
-        <div className="panel-head"><h3>Bitget Agent Hub</h3><small>{bitgetStatus.connected ? 'CONNECTED' : 'NOT CONNECTED'}</small></div>
-        <div className="settings-body">
-          <p className="lead">NIGHTWATCH AI is architected to consume the 5 official Bitget <code>bitget-signal</code> research skills (<code>{BITGET_SIGNAL_SKILLS.map(s => s.id).join(', ')}</code>).</p>
-          <div className="kv-row"><span>Adapter</span><b>{bitgetStatus.connected ? bitgetStatus.model || 'MCP' : 'Local deterministic skills'}</b></div>
-          <div className="kv-row"><span>Reason</span><b className="muted">{bitgetStatus.reason || 'ready'}</b></div>
-          <ol className="steps">
-            {BITGET_CONNECTION_HELP.map((h, i) => <li key={i}>{h}</li>)}
-          </ol>
+      {user && (
+        <div className="panel">
+          <div className="panel-head"><h3>Account</h3><small>Signed in</small></div>
+          <div className="settings-body">
+            <div className="kv-row"><span>Name</span><b>{user.name || user.email?.split('@')[0] || '—'}</b></div>
+            <div className="kv-row"><span>Email</span><b>{user.email}</b></div>
+            <div className="kv-row"><span>Alpha of the Day email</span>
+              <button className="btn ghost sm" onClick={() => setPage('nightwatch02')}>Manage subscription →</button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="panel">
-        <div className="panel-head"><h3>Trader profile</h3><small>Personalizes signals and stress tests</small></div>
+        <div className="panel-head"><h3>Trader profile</h3><small>Shapes signal filtering and stress-test framing</small></div>
+        <p className="settings-note">These preferences personalize every research report, signal ranking, and thesis stress-test. Nothing here places live orders.</p>
         <div className="settings-grid">
-          <label><small>NAV (paper)</small><input type="number" min="1000" step="1000" value={prefs.nav} onChange={e => setNumPref('nav', e.target.value, 1000, 1e9, 25000)} /></label>
-          <label><small>Risk profile</small>
+          <label>
+            <small>Paper capital (USD)</small>
+            <input type="number" min="1000" step="1000" value={prefs.nav}
+              onChange={e => setNumPref('nav', e.target.value, 1000, 1e9)} />
+            <em className="field-hint">Nominal book size used for position sizing. Paper only.</em>
+          </label>
+          <label>
+            <small>Risk profile</small>
             <select value={prefs.risk} onChange={e => setPref('risk', e.target.value)}>
-              {['CONSERVATIVE','MODERATE','AGGRESSIVE'].map(r => <option key={r}>{r}</option>)}
+              {RISK_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
+            <em className="field-hint">Wider stops and larger sizing as you move up.</em>
           </label>
-          <label><small>Style</small>
+          <label>
+            <small>Trading style</small>
             <select value={prefs.style} onChange={e => setPref('style', e.target.value)}>
-              {['EVENT_DRIVEN','TREND_FOLLOW','MEAN_REVERT','MACRO'].map(r => <option key={r}>{r}</option>)}
+              {STYLE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
+            <em className="field-hint">Tunes which skills weight the thesis most heavily.</em>
           </label>
-          <label><small>Horizon</small>
+          <label>
+            <small>Time horizon</small>
             <select value={prefs.horizon} onChange={e => setPref('horizon', e.target.value)}>
-              {['INTRADAY','SWING','POSITION'].map(r => <option key={r}>{r}</option>)}
+              {HORIZON_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
+            <em className="field-hint">Guides target and stop distance.</em>
           </label>
-          <label><small>Min confidence</small><input type="number" step="0.05" min="0.4" max="0.95" value={prefs.minConfidence} onChange={e => setNumPref('minConfidence', e.target.value, 0.4, 0.95, 0.6)} /></label>
-          <label><small>Min net edge</small><input type="number" step="0.001" min="0" max="0.1" value={prefs.minNetEdge} onChange={e => setNumPref('minNetEdge', e.target.value, 0, 0.1, 0.005)} /></label>
-          <label><small>Max position % NAV</small><input type="number" step="0.01" min="0.02" max="0.5" value={prefs.maxPositionPct} onChange={e => setNumPref('maxPositionPct', e.target.value, 0.02, 0.5, 0.1)} /></label>
+          <label>
+            <small>Minimum confidence (%)</small>
+            <input type="number" step="5" min="40" max="95"
+              value={Math.round((prefs.minConfidence ?? 0.6) * 100)}
+              onChange={e => setPctPref('minConfidence', e.target.value, 40, 95)} />
+            <em className="field-hint">Reports below this confidence are flagged Sit-Out.</em>
+          </label>
+          <label>
+            <small>Minimum net edge (bps)</small>
+            <input type="number" step="5" min="0" max="1000"
+              value={Math.round((prefs.minNetEdge ?? 0.005) * 10000)}
+              onChange={e => setBpsPref('minNetEdge', e.target.value, 0, 1000)} />
+            <em className="field-hint">Required expected return after friction. 1% = 100 bps.</em>
+          </label>
+          <label>
+            <small>Max position size (% of capital)</small>
+            <input type="number" step="1" min="2" max="50"
+              value={Math.round((prefs.maxPositionPct ?? 0.1) * 100)}
+              onChange={e => setPctPref('maxPositionPct', e.target.value, 2, 50)} />
+            <em className="field-hint">Hard cap on any single paper trade.</em>
+          </label>
         </div>
       </div>
 
       <div className="panel">
-        <div className="panel-head"><h3>Watchlist</h3><small>{session.watchlist.length} symbols</small></div>
+        <div className="panel-head"><h3>Watchlist</h3><small>{session.watchlist.length} of {session.universe.length} symbols</small></div>
+        <p className="settings-note">Symbols you follow. Alerts, signal ranking, and the News tape prioritize your watchlist.</p>
         <div className="watch-grid">
           {session.watchlist.map(sym => (
             <div className="watch-tag" key={sym}>
               <b>{sym}</b>
-              <button className="chip mini" onClick={() => setSession(s => ({ ...s, watchlist: s.watchlist.filter(x => x !== sym) }))}>×</button>
+              <button className="chip mini" title="Remove from watchlist"
+                onClick={() => setSession(s => ({ ...s, watchlist: s.watchlist.filter(x => x !== sym) }))}>×</button>
             </div>
           ))}
           {session.universe.filter(u => !session.watchlist.includes(u.symbol)).map(u => (
-            <button key={u.symbol} className="watch-tag ghost" onClick={() => setSession(s => ({ ...s, watchlist: [...s.watchlist, u.symbol] }))}>+ {u.symbol}</button>
+            <button key={u.symbol} className="watch-tag ghost" title={`Add ${u.symbol} to watchlist`}
+              onClick={() => setSession(s => ({ ...s, watchlist: [...s.watchlist, u.symbol] }))}>+ {u.symbol}</button>
           ))}
         </div>
       </div>
 
       <div className="panel">
-        <div className="panel-head"><h3>Session</h3><small>Local · trader-gated</small></div>
+        <div className="panel-head"><h3>Bitget integration</h3><small>{bitgetStatus.connected ? 'Connected' : 'Not connected'}</small></div>
+        <p className="settings-note">Research is powered by the five Bitget Agent Hub research skills — news, market intel, technicals, sentiment and macro. When a Bitget MCP endpoint is configured on the server, calls are proxied to the live signal service; otherwise deterministic local skills run and the report is clearly labeled.</p>
         <div className="settings-body">
-          <div className="kv-row"><span>Paper only</span><b className="up">ENFORCED</b></div>
-          <div className="kv-row"><span>Storage</span><b>localStorage · nightwatch.session.v3.&lt;user&gt;</b></div>
-          <div className="kv-row"><span>Engine</span><b>{session.provider.engine}</b></div>
-          <button className="btn ghost" onClick={onReset}>RESET SESSION</button>
+          <div className="kv-row"><span>Status</span><b className={bitgetStatus.connected ? 'up' : 'muted'}>{bitgetStatus.connected ? 'Bitget MCP · live' : 'Local skills · offline mode'}</b></div>
+          <div className="kv-row"><span>Adapter</span><b>{bitgetStatus.connected ? (bitgetStatus.model || 'Bitget MCP') : 'Local deterministic engine'}</b></div>
+          {bitgetStatus.reason && <div className="kv-row"><span>Detail</span><b className="muted">{bitgetStatus.reason}</b></div>}
+          <details className="settings-details">
+            <summary>Connect Bitget Agent Hub on your server</summary>
+            <ol className="steps">
+              {BITGET_CONNECTION_HELP.map((h, i) => <li key={i}>{h}</li>)}
+            </ol>
+          </details>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head"><h3>Session data</h3><small>Local device</small></div>
+        <div className="settings-body">
+          <div className="kv-row"><span>Trading mode</span><b className="up">Paper only — no live orders</b></div>
+          <div className="kv-row"><span>Storage</span><b>Local to this browser · scoped per account</b></div>
+          <div className="kv-row"><span>Research engine</span><b>{session.provider.engine || 'Local'}</b></div>
+          <p className="settings-note">Reset clears your local watchlist, research reports, theses and paper-book on this device only. Your account, saved playbooks and Alpha of the Day subscription are untouched.</p>
+          <button className="btn ghost" onClick={confirmReset}>Reset local session</button>
         </div>
       </div>
     </div>

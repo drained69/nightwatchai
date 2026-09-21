@@ -740,6 +740,7 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
 
 /** Produce the full research report artifact for `research` intent. */
 export function buildResearchReport({ question, symbol, market, skills, signal, memory, invalidationOverride }) {
+  const prefs = memory?.preferences || {}
   const supporting = []
   const contradicting = []
   const news = skills.find(s => s.skill === 'news-briefing')
@@ -781,19 +782,45 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
   const whatChangesThisThesis = buildChangeConditions(symbol, market, signal, skills)
   const stressTests = buildStressTests(symbol, market, signal, skills)
 
-  const invalidation = invalidationOverride || {
-    price: signal.direction === 'LONG'
-      ? Number(((ta.data.live && ta.data.support != null ? Math.min(ta.data.support, market.price * (1 - Math.max(0.01, market.atrPct / 150))) : market.price * (1 - Math.max(0.015, market.atrPct / 100)))).toFixed(2))
-      : signal.direction === 'SHORT'
-      ? Number(((ta.data.live && ta.data.resistance != null ? Math.max(ta.data.resistance, market.price * (1 + Math.max(0.01, market.atrPct / 150))) : market.price * (1 + Math.max(0.015, market.atrPct / 100)))).toFixed(2))
-      : null,
-    conditions: [
-      market.class === 'crypto' ? 'BTC 24h ≤ −3%' : 'BTC 24h ≤ −3% (risk-off cross-asset)',
-      `${ta.data.trend === 'UP' ? 'Close < EMA20' : 'Close > EMA20'}`,
-      news.data.live ? 'New headline flips the live wire bias against the trade'
-        : news.data.beat ? 'Guidance / print re-cut' : 'Volume decays below 20-session median',
-    ],
-  }
+  // Build direction-aware invalidation: the price level + narrative conditions
+  // must describe what would kill THIS trade, not a generic bearish scenario.
+  // For SIT-OUT reports we reframe as "what would change our mind" instead of
+  // showing an invalidation for a trade the desk never recommended.
+  const invalidation = invalidationOverride || (signal.status === 'NO_TRADE'
+    ? {
+        price: null,
+        // NO_TRADE is not an invalidation — it's an entry gate. Describe the
+        // conditions that would move the desk from SIT-OUT to a real signal.
+        heading: 'Change-of-mind conditions',
+        conditions: [
+          `Composite lifts above ${(prefs.minConfidence || 0.65).toFixed(2)} with net edge > ${((prefs.minEdge || 0.008) * 100).toFixed(2)}%`,
+          ta.data.trend === 'UP'
+            ? `New close above ${ta.data.resistance != null ? '$' + fmtPrice(ta.data.resistance) : 'range high'} on expanding volume`
+            : ta.data.trend === 'DOWN'
+              ? `New break below ${ta.data.support != null ? '$' + fmtPrice(ta.data.support) : 'range low'} on expanding volume`
+              : `${market.class === 'crypto' ? 'BTC' : 'macro tape'} regime resolves out of chop`,
+          news.data.live
+            ? 'Fresh catalyst headline that shifts the balance beyond the current mixed read'
+            : news.data.beat != null
+              ? 'Company confirms or re-cuts guidance vs. current print'
+              : 'Wire ingests a symbol-tagged headline that moves the tape',
+        ],
+      }
+    : {
+        price: signal.direction === 'LONG'
+          // LONG dies if price breaks structural support (or 1% below, whichever is tighter to price).
+          ? Number(((ta.data.live && ta.data.support != null
+              ? Math.min(ta.data.support, market.price * (1 - Math.max(0.01, market.atrPct / 150)))
+              : market.price * (1 - Math.max(0.015, market.atrPct / 100)))).toFixed(2))
+          : signal.direction === 'SHORT'
+          // SHORT dies if price breaks structural resistance (or 1% above).
+          ? Number(((ta.data.live && ta.data.resistance != null
+              ? Math.max(ta.data.resistance, market.price * (1 + Math.max(0.01, market.atrPct / 150)))
+              : market.price * (1 + Math.max(0.015, market.atrPct / 100)))).toFixed(2))
+          : null,
+        heading: 'Invalidation',
+        conditions: buildInvalidationConditions(symbol, market, signal, ta.data, news.data),
+      })
 
   const summary = signal.status === 'NO_TRADE'
     ? `${symbol}: research does not support opening a book. Composite ${signal.composite}, net edge ${fmtPct(signal.netEdge)}. ${signal.reason}`
@@ -970,6 +997,47 @@ function buildChangeConditions(symbol, market, signal, skills) {
     why: 'Macro regime flips — the risk-on/off backdrop for the setup inverts',
   })
   return conditions.slice(0, 6)
+}
+
+/**
+ * Invalidation conditions — direction-aware. What kills a LONG (broad risk-off
+ * / structural breakdown / adverse catalyst) is the OPPOSITE of what kills a
+ * SHORT. The prior implementation keyed the EMA and BTC conditions off `trend`
+ * and `market.class`, which produced backwards conditions any time the trade
+ * direction differed from the current trend (e.g. shorting into an UP trend).
+ */
+function buildInvalidationConditions(symbol, market, signal, taData, newsData) {
+  const dir = signal.direction
+  const isLong = dir === 'LONG'
+  const isCrypto = market.class === 'crypto'
+
+  // Cross-asset condition: LONG dies on broad risk-off, SHORT dies on broad
+  // risk-on. Copy adapts to whether the traded asset IS BTC or is an equity
+  // referencing BTC as its risk proxy.
+  const crossAsset = isCrypto
+    ? (isLong ? 'BTC 24h ≤ −3%' : 'BTC 24h ≥ +3%')
+    : (isLong ? 'BTC 24h ≤ −3% (risk-off cross-asset flips against the long)'
+              : 'BTC 24h ≥ +3% (risk-on cross-asset flips against the short)')
+
+  // Structural condition: LONG dies below EMA20 (trend break), SHORT dies
+  // above EMA20 (trend break). This must key off the TRADE DIRECTION, not off
+  // the current trend, so contrarian entries get correct invalidation copy.
+  const emaLevel = taData?.ema20 != null ? ' ($' + fmtPrice(taData.ema20) + ')' : ''
+  const structural = isLong
+    ? `1h close < EMA20${emaLevel} · trend break against the long`
+    : `1h close > EMA20${emaLevel} · trend break against the short`
+
+  // Catalyst condition: any incoming headline that flips the desk's read
+  // against the trade side.
+  const catalyst = newsData?.live
+    ? (isLong
+        ? 'New symbol-tagged headline turns the live wire bearish'
+        : 'New symbol-tagged headline turns the live wire bullish')
+    : newsData?.beat != null
+      ? (isLong ? 'Guidance cut / negative pre-announcement' : 'Guidance raise / positive pre-announcement')
+      : 'Volume decays below 20-session median with the tape moving against the trade'
+
+  return [crossAsset, structural, catalyst]
 }
 
 /**
@@ -1589,15 +1657,18 @@ export class LocalNightwatchEngine {
 
 /* -------------------------------------------------------------- convenience */
 
+// Every suggestion resolves to a specific tokenized asset in the mapped
+// universe — the research pipeline only produces a real report when it can
+// bind the question to a symbol Bitget actually lists. Multi-asset scans and
+// vague "market-wide" prompts are excluded on purpose because they route to
+// the honest-refusal card instead of a genuine desk report.
 export const RESEARCH_QUESTION_SUGGESTIONS = [
   { id: 'nvda',   label: 'Why is NVDA moving right now?',       question: 'Why is NVDA moving right now?' },
   { id: 'tsla',   label: 'Research TSLA into the print',        question: 'Research TSLA overnight — is the setup sustainable into the next print?' },
   { id: 'aapl',   label: 'Short AAPL overnight — worth it?',    question: 'Short AAPL overnight — is the setup worth it?' },
   { id: 'msft',   label: 'MSFT vs. macro risk-off',             question: 'How does MSFT hold up if macro flips risk-off overnight?' },
   { id: 'meta',   label: 'META ad-tier momentum still real?',   question: 'Is META’s ad-tier momentum still real, or already priced in?' },
-  { id: 'scan',   label: 'Strongest overnight opportunities',   question: 'Find the strongest overnight opportunities across my watchlist.' },
   { id: 'mstr',   label: 'Stress-test long MSTR here',          question: '/thesis Long MSTR here as a BTC-beta trade.' },
-  { id: 'coin',   label: 'Research COIN into weekend flows',    question: 'Research COIN into weekend crypto flows.' },
 ]
 
 export const BITGET_CONNECTION_HELP = [

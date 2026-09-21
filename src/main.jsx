@@ -1006,7 +1006,7 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
           </ul>
         </Section>
 
-        <Section title="Invalidation" icon={<ShieldCheck size={13} />}>
+        <Section title={report.invalidation.heading || 'Invalidation'} icon={<ShieldCheck size={13} />}>
           {report.invalidation.price ? <div className="kv"><span>Price level</span><b>${fmtPrice(report.invalidation.price)}</b></div> : null}
           <ul className="dense">
             {report.invalidation.conditions.map((c, i) => <li key={i}>{c}</li>)}
@@ -1242,8 +1242,8 @@ function ThesisResult({ artifact }) {
             {artifact.stressTests.map((s, i) => <div className="mini-row" key={i}><b>{s.name}</b><span>{s.shock}</span><em className={s.expectedPnlPct >= 0 ? 'up' : 'down'}>{fmtPct(s.expectedPnlPct)}</em><em className={s.survivable ? 'up' : 'down'}>{s.survivable ? 'YES' : 'NO'}</em></div>)}
           </div>
         </Section>
-        <Section title="Invalidation" icon={<ShieldCheck size={13} />}>
-          <div className="kv"><span>Price</span><b>${fmtPrice(artifact.invalidation.price)}</b></div>
+        <Section title={artifact.invalidation.heading || 'Invalidation'} icon={<ShieldCheck size={13} />}>
+          {artifact.invalidation.price ? <div className="kv"><span>Price</span><b>${fmtPrice(artifact.invalidation.price)}</b></div> : null}
           <ul className="dense">{artifact.invalidation.conditions.map((c, i) => <li key={i}>{c}</li>)}</ul>
         </Section>
         <Section title="Historical analogs" icon={<PieChart size={13} />}>

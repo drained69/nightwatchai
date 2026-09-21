@@ -568,6 +568,29 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 .settings-details summary { cursor: pointer; font: 600 10px 'IBM Plex Mono'; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); padding: 6px 0 }
 .settings-details summary:hover { color: var(--text) }
 .settings-details .steps { margin-top: 8px }
+.btn.danger { background: var(--panel); border: 1px solid var(--down); color: var(--down); font-weight: 600 }
+.btn.danger:hover { background: var(--down); color: var(--panel) }
+.confirm-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; padding: 16px; backdrop-filter: blur(2px);
+}
+.confirm-dialog {
+  background: var(--panel); border: 1px solid var(--line);
+  max-width: 440px; width: 100%; padding: 24px 26px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  animation: confirmIn 140ms ease-out;
+}
+@keyframes confirmIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+.confirm-dialog .confirm-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border: 1px solid var(--down); color: var(--down);
+  border-radius: 50%; margin-bottom: 12px;
+}
+.confirm-dialog h3 { font: 500 20px 'DM Serif Display', Georgia, serif; margin: 0 0 10px; color: var(--text) }
+.confirm-dialog p { font: 400 12px/1.55 'IBM Plex Mono'; color: var(--text-2); margin: 0 0 8px }
+.confirm-dialog .confirm-warn { color: var(--down); font-weight: 600 }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px }
 .watch-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 24px }
 .watch-tag {
   display: inline-flex; align-items: center; gap: 6px;

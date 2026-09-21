@@ -4,7 +4,7 @@ import {
   AlertTriangle, ArrowDownRight, ArrowUpRight, BookOpen, BrainCircuit, BarChart3,
   CalendarClock, ChevronRight, Copy, Cpu, Crosshair, Database, ExternalLink, Eye, FileText, Filter,
   LineChart, LogOut, MessageCircle, Menu, Newspaper, PieChart, Play, Radio, ScanLine,
-  Search, Send, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
+  Search, Send, Settings, ShieldAlert, ShieldCheck, Sparkles, Terminal, TerminalSquare, Wallet, X, Zap,
 } from 'lucide-react'
 import './styles.css'
 import { ErrorBoundary } from './ui/ErrorBoundary.jsx'
@@ -35,7 +35,7 @@ import { AnalysisPage } from './ui/AnalysisPage.jsx'
 import { Nightwatch02Page } from './ui/Nightwatch02Page.jsx'
 import { ResearchCardActions } from './ui/ResearchCard.jsx'
 import {
-  BITGET_CONNECTION_HELP, BITGET_SIGNAL_SKILLS, DEMO_NEWS, DEMO_UNIVERSE,
+  BITGET_SIGNAL_SKILLS, DEMO_NEWS, DEMO_UNIVERSE,
   DemoMarketData, NightwatchProvider, PaperExecution,
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
@@ -629,7 +629,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
         {page === 'portfolio' && <PortfolioPage session={session} activeArtifact={activeArtifact} closeAtMark={closeAtMark} setCommand={setCommand} submit={submit} />}
         {page === 'backtest'  && <BacktestPage session={session} />}
         {page === 'history'   && <HistoryPage session={session} activeArtifact={activeArtifact} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
-        {page === 'settings'  && <SettingsPage session={session} setSession={setSession} bitgetStatus={bitgetStatus} onReset={resetSession} user={authUser} setPage={setPage} />}
+        {page === 'settings'  && <SettingsPage session={session} setSession={setSession} onReset={resetSession} user={authUser} setPage={setPage} />}
         {page === 'assayer'   && (
           authUser
             ? <AssayerPage user={authUser} onAllocated={() => setPage('portfolio')} />
@@ -1645,8 +1645,9 @@ const RISK_OPTIONS    = [['CONSERVATIVE', 'Conservative'], ['MODERATE', 'Moderat
 const STYLE_OPTIONS   = [['EVENT_DRIVEN', 'Event-driven'], ['TREND_FOLLOW', 'Trend-following'], ['MEAN_REVERT', 'Mean reversion'], ['MACRO', 'Macro']]
 const HORIZON_OPTIONS = [['INTRADAY', 'Intraday'], ['SWING', 'Swing (days to weeks)'], ['POSITION', 'Position (weeks to months)']]
 
-function SettingsPage({ session, setSession, bitgetStatus, onReset, user, setPage }) {
+function SettingsPage({ session, setSession, onReset, user, setPage }) {
   const prefs = session.memory.preferences
+  const [confirmingReset, setConfirmingReset] = useState(false)
   const setPref = (key, value) => setSession(s => ({ ...s, memory: { ...s.memory, preferences: { ...s.memory.preferences, [key]: value } } }))
   // Clamp numeric prefs on change: raw Number('') is NaN, which JSON-serializes
   // to null and silently corrupts stored preferences; out-of-range values break
@@ -1667,12 +1668,10 @@ function SettingsPage({ session, setSession, bitgetStatus, onReset, user, setPag
     if (raw === '' || !Number.isFinite(n)) return
     setPref(key, Math.min(maxBps, Math.max(minBps, n)) / 10000)
   }
-  const confirmReset = () => {
-    if (window.confirm('Reset your local session? Watchlist, research reports, theses and paper-book positions on this device will be cleared. Your account and its saved playbooks are unaffected.')) onReset()
-  }
+  const runReset = () => { setConfirmingReset(false); onReset() }
   return (
     <div className="page">
-      <PageHead title="Settings" eyebrow={<><Settings size={12} /> ACCOUNT · PREFERENCES · INTEGRATIONS</>} />
+      <PageHead title="Settings" eyebrow={<><Settings size={12} /> ACCOUNT · PREFERENCES</>} />
 
       {user && (
         <div className="panel">
@@ -1761,31 +1760,29 @@ function SettingsPage({ session, setSession, bitgetStatus, onReset, user, setPag
       </div>
 
       <div className="panel">
-        <div className="panel-head"><h3>Bitget integration</h3><small>{bitgetStatus.connected ? 'Connected' : 'Not connected'}</small></div>
-        <p className="settings-note">Research is powered by the five Bitget Agent Hub research skills — news, market intel, technicals, sentiment and macro. When a Bitget MCP endpoint is configured on the server, calls are proxied to the live signal service; otherwise deterministic local skills run and the report is clearly labeled.</p>
-        <div className="settings-body">
-          <div className="kv-row"><span>Status</span><b className={bitgetStatus.connected ? 'up' : 'muted'}>{bitgetStatus.connected ? 'Bitget MCP · live' : 'Local skills · offline mode'}</b></div>
-          <div className="kv-row"><span>Adapter</span><b>{bitgetStatus.connected ? (bitgetStatus.model || 'Bitget MCP') : 'Local deterministic engine'}</b></div>
-          {bitgetStatus.reason && <div className="kv-row"><span>Detail</span><b className="muted">{bitgetStatus.reason}</b></div>}
-          <details className="settings-details">
-            <summary>Connect Bitget Agent Hub on your server</summary>
-            <ol className="steps">
-              {BITGET_CONNECTION_HELP.map((h, i) => <li key={i}>{h}</li>)}
-            </ol>
-          </details>
-        </div>
-      </div>
-
-      <div className="panel">
         <div className="panel-head"><h3>Session data</h3><small>Local device</small></div>
         <div className="settings-body">
           <div className="kv-row"><span>Trading mode</span><b className="up">Paper only — no live orders</b></div>
           <div className="kv-row"><span>Storage</span><b>Local to this browser · scoped per account</b></div>
-          <div className="kv-row"><span>Research engine</span><b>{session.provider.engine || 'Local'}</b></div>
           <p className="settings-note">Reset clears your local watchlist, research reports, theses and paper-book on this device only. Your account, saved playbooks and Alpha of the Day subscription are untouched.</p>
-          <button className="btn ghost" onClick={confirmReset}>Reset local session</button>
+          <button className="btn ghost" onClick={() => setConfirmingReset(true)}>Reset local session</button>
         </div>
       </div>
+
+      {confirmingReset && (
+        <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title" onClick={() => setConfirmingReset(false)}>
+          <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
+            <div className="confirm-icon"><ShieldAlert size={22} /></div>
+            <h3 id="reset-title">Reset local session?</h3>
+            <p>This will clear your local watchlist, research reports, theses, and paper-book positions on this device. Your account, saved playbooks, and Alpha of the Day subscription are unaffected.</p>
+            <p className="confirm-warn">This action cannot be undone.</p>
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={() => setConfirmingReset(false)}>Cancel</button>
+              <button className="btn danger" onClick={runReset}>Reset session</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

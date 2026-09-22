@@ -128,8 +128,8 @@ test('synthesizeSignal derives expectedEdge from real ATR on live rows', () => {
   if (signal.direction === 'FLAT') {
     assert.equal(signal.expectedEdge, 0)                    // FLAT never projects edge
   } else {
-    // ATR 1.8% → atrFrac 0.018 × 1.5 × conviction(≤1) ≤ 0.027
-    assert.ok(signal.expectedEdge > 0 && signal.expectedEdge <= 0.027, `edge out of range: ${signal.expectedEdge}`)
+    // ATR 1.8% → atrFrac 0.018 × 2.0 (swing-horizon multiplier) × conviction(≤1) ≤ 0.036
+    assert.ok(signal.expectedEdge > 0 && signal.expectedEdge <= 0.036, `edge out of range: ${signal.expectedEdge}`)
   }
   // Mixed-news fixture above → FLAT → zero edge, honest NO_TRADE
   const mixed = runSkillPack('BTC', liveMarket, { news: realNews, macro: realMacro, btcChange24h: 1.3 })

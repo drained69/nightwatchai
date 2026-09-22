@@ -118,8 +118,10 @@ export async function liveEnhanceArtifact(artifact, prefs = null) {
   // the two paths agree, defaulting to the historical "reject if netEdge
   // < 0" only when no user preference is on record.
   if (book?.spreadBps != null) {
-    const isCrypto = report.symbol ? ['BTC','ETH','SOL','BNB','XRP','DOGE','AVAX','ADA'].includes(report.symbol) : true
-    const realFriction = Math.max(book.spreadBps / 10000, 0.0002) + (isCrypto ? 0.002 : 0.003)
+    // Bitget spot taker on both crypto pairs and tokenized R-pair equities
+    // is ~0.10% per side (20 bps round-trip). Real spread applied on top,
+    // floored at 2 bps for slippage guard.
+    const realFriction = Math.max(book.spreadBps / 10000, 0.0002) + 0.002
     report.signal.estimatedFriction = Number(realFriction.toFixed(4))
     report.signal.netEdge = Number((report.signal.expectedEdge - realFriction - report.signal.riskAdjustment).toFixed(4))
 

@@ -683,24 +683,30 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
   const direction = bullish ? 'LONG' : bearish ? 'SHORT' : 'FLAT'
 
   const confidence = Number((0.5 + Math.abs(composite - 0.5) * 0.7).toFixed(2))
-  // Expected edge: on live data, derived from the asset's real ATR (half-ATR
+  // Expected edge: on live data, derived from the asset's real ATR (half-day
   // capture assumption) modulated by news conviction; seeded otherwise.
   const atrFrac = market.indicators?.atrPct != null ? market.indicators.atrPct / 100 : null
   let expectedEdge
   if (market.live && atrFrac != null) {
+    // News conviction: how one-sided the wire is. When it's a wash we still
+    // credit the tape / TA / macro read, so the floor is 0.55 (not 0.40 —
+    // the old value crushed expected edge on any mixed-news setup and put
+    // every equity report into a sit-out even when TA + macro agreed).
     const newsConviction = news.data.live && news.data.newsCounts
-      ? Math.min(1, (Math.abs((news.data.newsCounts.up || 0) - (news.data.newsCounts.down || 0)) / Math.max(1, (news.data.newsCounts.up || 0) + (news.data.newsCounts.down || 0) + (news.data.newsCounts.mixed || 0))) + 0.4)
-      : 0.7
-    // Expected favorable excursion over the signal horizon (≥8h) ≈ 1.5× the
-    // hourly ATR — conservative vs the ~4.9× hourly-ATR daily range.
-    const raw = direction === 'FLAT' ? 0 : atrFrac * 1.5 * newsConviction
-    expectedEdge = Number(Math.max(0, Math.min(0.06, raw)).toFixed(4))
+      ? Math.min(1, (Math.abs((news.data.newsCounts.up || 0) - (news.data.newsCounts.down || 0)) / Math.max(1, (news.data.newsCounts.up || 0) + (news.data.newsCounts.down || 0) + (news.data.newsCounts.mixed || 0))) + 0.55)
+      : 0.75
+    // Expected favorable excursion over the signal horizon (8-72h swing) ≈
+    // 2× the hourly ATR — conservative vs the ~4.9× hourly-ATR daily range,
+    // realistic for a 1-3 session hold.
+    const raw = direction === 'FLAT' ? 0 : atrFrac * 2.0 * newsConviction
+    expectedEdge = Number(Math.max(0, Math.min(0.08, raw)).toFixed(4))
   } else {
     expectedEdge = Number(((bullish ? 1 : bearish ? 1 : 0) * (0.012 + rand(symbol, 'edge') * 0.028)).toFixed(4))
   }
-  // Round-trip friction: Bitget spot taker ≈ 0.10% per side (crypto) and
-  // ≈ 0.15% per side for tokenized equities, plus the real spread when known.
-  const baseFees = market.class === 'crypto' ? 0.002 : 0.003
+  // Round-trip friction: Bitget spot taker ≈ 0.10% per side for both crypto
+  // and R-pair equities on the standard fee schedule, giving 20 bps
+  // round-trip. Adds the real spread when known.
+  const baseFees = 0.002
   const estimatedFriction = Number((baseFees + (mi.data.spreadBps / 10000)).toFixed(4))
   const riskAdjustment = Number(((market.volatility === 'HIGH' ? 0.012 : market.volatility === 'MED' ? 0.006 : 0.003) * p.riskMultiplier).toFixed(4))
   const netEdge = Number((expectedEdge - estimatedFriction - riskAdjustment).toFixed(4))
@@ -715,7 +721,11 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
   const minNetEdge    = Number.isFinite(prefs?.minNetEdge)    ? prefs.minNetEdge    : 0
   const failsConfidence = confidence < minConfidence
   const failsNetEdge    = netEdge    < minNetEdge
-  const cryptoShortFloor = bearish && market.class === 'crypto' && netEdge < 0.003
+  // Crypto-short safety floor — a bearish crypto trade still needs a
+  // reasonable net edge because shorts are borrow-cost sensitive. 10 bps is
+  // the floor (was 30 bps — too strict; killed BTC/ETH shorts with modest
+  // positive edge). Trader can still override via minNetEdge.
+  const cryptoShortFloor = bearish && market.class === 'crypto' && netEdge < 0.001
   const noTrade = direction === 'FLAT' || failsNetEdge || failsConfidence || cryptoShortFloor
 
   const horizonPref = (prefs?.horizon || '').toUpperCase()

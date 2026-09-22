@@ -86,8 +86,12 @@ const seedMemory = {
     risk: 'MODERATE',                          // CONSERVATIVE · MODERATE · AGGRESSIVE
     horizon: 'SWING',                          // INTRADAY · SWING · POSITION
     style: 'EVENT_DRIVEN',                     // EVENT_DRIVEN · TREND_FOLLOW · MEAN_REVERT · MACRO
-    minConfidence: 0.65,
-    minNetEdge: 0.008,
+    // Out-of-the-box gates are set for a demo-friendly first experience: any
+    // directional signal with >=50% confidence and a non-negative net edge
+    // becomes a tradeable report. Serious traders should tighten these two
+    // via Settings — a 65%/80bps configuration is a good "swing pro" preset.
+    minConfidence: 0.50,
+    minNetEdge: 0.0,
     maxPositionPct: 0.15,                      // % of NAV per position
     nav: 25000,
   },
@@ -645,9 +649,14 @@ export function personaWeights(prefs = {}) {
   if (style === 'TREND_FOLLOW') { w.tech = 1.8; w.macro = 1.1 }
   if (style === 'MEAN_REVERT')  { w.tech = 1.4; w.sent = 1.6; w.news = 0.7 }
   if (style === 'MACRO')        { w.macro = 1.9; w.sent = 1.3; w.news = 0.9 }
-  // Risk threshold shifts direction cut-offs.
-  const bullThreshold = risk === 'CONSERVATIVE' ? 0.62 : risk === 'AGGRESSIVE' ? 0.51 : 0.55
-  const bearThreshold = risk === 'CONSERVATIVE' ? 0.38 : risk === 'AGGRESSIVE' ? 0.45 : 0.40
+  // Risk threshold shifts direction cut-offs. AGGRESSIVE collapses the
+  // dead-zone almost entirely — any composite off the 0.485 midpoint becomes
+  // a directional signal, letting the netEdge and confidence gates handle
+  // the "should we actually trade this" question. This matches how a real
+  // aggressive book operates: take any lean, size around risk instead of
+  // waiting for perfect conviction on every read.
+  const bullThreshold = risk === 'CONSERVATIVE' ? 0.62 : risk === 'AGGRESSIVE' ? 0.485 : 0.53
+  const bearThreshold = risk === 'CONSERVATIVE' ? 0.38 : risk === 'AGGRESSIVE' ? 0.485 : 0.47
   const riskMultiplier = risk === 'CONSERVATIVE' ? 1.5 : risk === 'AGGRESSIVE' ? 0.7 : 1.0
   return { weights: w, bullThreshold, bearThreshold, riskMultiplier, style, risk }
 }
@@ -697,11 +706,15 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
   const netEdge = Number((expectedEdge - estimatedFriction - riskAdjustment).toFixed(4))
 
   // Trader-configurable gates. The floors default to permissive values so
-  // existing behavior is preserved when no preferences are set.
+  // existing behavior is preserved when no preferences are set. minNetEdge
+  // is honored as raw: a negative value (e.g. -0.02) is a valid opt-in for
+  // aggressive traders who want to see the desk's read even when friction
+  // eats a small edge. The prior implementation clipped this to Math.max(_, 0)
+  // which silently ignored any relaxation the operator set below zero.
   const minConfidence = Number.isFinite(prefs?.minConfidence) ? prefs.minConfidence : 0
   const minNetEdge    = Number.isFinite(prefs?.minNetEdge)    ? prefs.minNetEdge    : 0
   const failsConfidence = confidence < minConfidence
-  const failsNetEdge    = netEdge    < Math.max(minNetEdge, 0)
+  const failsNetEdge    = netEdge    < minNetEdge
   const cryptoShortFloor = bearish && market.class === 'crypto' && netEdge < 0.003
   const noTrade = direction === 'FLAT' || failsNetEdge || failsConfidence || cryptoShortFloor
 
@@ -716,14 +729,21 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
     reason = `${direction} ${symbol}: ${bullish ? 'news, flow and macro agree' : 'downside pressure across news, tape and macro'}; net edge ${(netEdge * 100).toFixed(2)}% after ${(estimatedFriction * 100).toFixed(2)}% friction.`
   } else if (failsConfidence) {
     reason = `Confidence ${(confidence * 100).toFixed(0)}% is below your ${(minConfidence * 100).toFixed(0)}% floor — sit-out flagged by your Settings.`
-  } else if (failsNetEdge && minNetEdge > 0) {
+  } else if (failsNetEdge) {
     reason = `Net edge ${(netEdge * 100).toFixed(2)}% is below your ${(minNetEdge * 100).toFixed(2)}% floor after friction — sit-out flagged by your Settings.`
+  } else if (cryptoShortFloor) {
+    reason = `Short on ${symbol}: net edge ${(netEdge * 100).toFixed(2)}% is under the crypto-short safety floor of 0.30% — desk stays flat rather than borrow into a thin edge.`
   } else {
-    reason = `Signal did not clear net-edge floor after friction and risk adjustment. ${direction === 'FLAT' ? 'Skill scores are mixed.' : ''}`
+    reason = `Skills produce a mixed read — composite ${composite.toFixed(3)} sits between the LONG/SHORT thresholds for your ${p.risk.toLowerCase()} risk profile.`
   }
 
   return {
-    direction: noTrade ? 'FLAT' : direction,
+    // Preserve the raw directional read even when a gate flips us to
+    // NO_TRADE — the trader can then see "SHORT · SIT-OUT (net edge below
+    // your floor)" instead of the misleading "FLAT · SIT-OUT (skills are
+    // mixed)". Direction only degrades to FLAT when the composite genuinely
+    // sits in the dead zone between bull/bear thresholds.
+    direction,
     confidence,
     expectedEdge,
     estimatedFriction,
@@ -793,7 +813,7 @@ export function buildResearchReport({ question, symbol, market, skills, signal, 
         // conditions that would move the desk from SIT-OUT to a real signal.
         heading: 'Change-of-mind conditions',
         conditions: [
-          `Composite lifts above ${(prefs.minConfidence || 0.65).toFixed(2)} with net edge > ${((prefs.minEdge || 0.008) * 100).toFixed(2)}%`,
+          `Composite lifts above ${(prefs.minConfidence ?? 0.5).toFixed(2)} with net edge > ${((prefs.minNetEdge ?? 0) * 100).toFixed(2)}%`,
           ta.data.trend === 'UP'
             ? `New close above ${ta.data.resistance != null ? '$' + fmtPrice(ta.data.resistance) : 'range high'} on expanding volume`
             : ta.data.trend === 'DOWN'

@@ -458,7 +458,7 @@ const server = http.createServer(async (req, res) => {
         const artifact = await engine.run(enriched)
         // Live overlay — real cross-venue positioning + market intel + book depth
         const { artifact: withLive, live } = request.intent === 'research'
-          ? await liveEnhanceArtifact(artifact)
+          ? await liveEnhanceArtifact(artifact, clientCtx.memory?.preferences)
           : { artifact, live: {} }
         const { artifact: rewritten, engine: engineName } = await narrateReport(withLive, request.question || request.thesis)
         const bitget = probeBitget()

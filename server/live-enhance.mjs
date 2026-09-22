@@ -15,7 +15,7 @@ import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
 import { computeIndicators, getTicker } from './providers/bitget.mjs'
 import { logger } from './lib/log.mjs'
 
-export async function liveEnhanceArtifact(artifact) {
+export async function liveEnhanceArtifact(artifact, prefs = null) {
   if (!artifact?.report) return { artifact, live: {} }
   const symbol = artifact.report.symbol
   const [ticker, indicators, positioning, book, intel] = await Promise.all([
@@ -107,16 +107,27 @@ export async function liveEnhanceArtifact(artifact) {
   }
 
   // ---- overlay signal net-edge friction with real spread
+  //
+  // We recompute netEdge here to reflect the ACTUAL Bitget spread rather
+  // than the engine's spread estimate. The prior implementation then
+  // unconditionally flipped SIGNAL → NO_TRADE any time netEdge went below
+  // zero, which silently ignored the trader's minNetEdge preference — an
+  // AGGRESSIVE user with a -200bp floor still saw every low-vol equity
+  // rewritten to SIT-OUT here after the local engine had correctly
+  // approved it. Re-apply the SAME configurable gate the engine uses so
+  // the two paths agree, defaulting to the historical "reject if netEdge
+  // < 0" only when no user preference is on record.
   if (book?.spreadBps != null) {
-    // Real spread (min 2bps slippage guard) + round-trip taker fees ≈ 20bps crypto / 30bps equities.
     const isCrypto = report.symbol ? ['BTC','ETH','SOL','BNB','XRP','DOGE','AVAX','ADA'].includes(report.symbol) : true
     const realFriction = Math.max(book.spreadBps / 10000, 0.0002) + (isCrypto ? 0.002 : 0.003)
     report.signal.estimatedFriction = Number(realFriction.toFixed(4))
     report.signal.netEdge = Number((report.signal.expectedEdge - realFriction - report.signal.riskAdjustment).toFixed(4))
-    if (report.signal.netEdge < 0 && report.signal.status === 'SIGNAL') {
+
+    const minNetEdge = Number.isFinite(prefs?.minNetEdge) ? prefs.minNetEdge : 0
+    if (report.signal.netEdge < minNetEdge && report.signal.status === 'SIGNAL') {
       report.signal.status = 'NO_TRADE'
       report.signal.direction = 'FLAT'
-      report.signal.reason = `Net edge went negative after real ${book.spreadBps.toFixed(1)}bps spread was applied. ${report.signal.reason}`
+      report.signal.reason = `Post-friction net edge ${(report.signal.netEdge * 100).toFixed(2)}% fell below your ${(minNetEdge * 100).toFixed(2)}% floor after real ${book.spreadBps.toFixed(1)}bps spread was applied.`
       report.suggestion = null
     }
   }

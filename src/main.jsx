@@ -2181,6 +2181,41 @@ function SettingsPage({ session, setSession, onReset, user, setPage }) {
       <div className="panel">
         <div className="panel-head"><h3>Trader profile</h3><small>Shapes signal filtering and stress-test framing</small></div>
         <p className="settings-note">These preferences personalize every research report, signal ranking, and thesis stress-test. Nothing here places live orders.</p>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16, paddingBottom: 12, borderBottom: '1px dashed var(--edge)' }}>
+          <small style={{ marginRight: 4, alignSelf: 'center', opacity: 0.65, fontSize: 10, letterSpacing: 0.3, textTransform: 'uppercase' }}>Presets</small>
+          {[
+            {
+              id: 'aggressive',
+              label: 'Aggressive · demo-friendly',
+              title: 'Loosest gate — Aggressive risk profile, Trend-following style, 30% min confidence, −200 bps min net edge. Best for exploring the desk on a mixed tape.',
+              patch: { risk: 'AGGRESSIVE', style: 'TREND_FOLLOW', horizon: 'SWING', minConfidence: 0.30, minNetEdge: -0.02, maxPositionPct: 0.20 },
+            },
+            {
+              id: 'balanced',
+              label: 'Balanced · out-of-box',
+              title: 'Balanced defaults — Moderate risk, Event-driven style, 50% min confidence, 0 bps min net edge. Suits most day-to-day research.',
+              patch: { risk: 'MODERATE', style: 'EVENT_DRIVEN', horizon: 'SWING', minConfidence: 0.50, minNetEdge: 0.0, maxPositionPct: 0.15 },
+            },
+            {
+              id: 'conservative',
+              label: 'Conservative · pro',
+              title: 'Strict gate — Conservative risk, Event-driven, 65% min confidence, 80 bps min net edge. Only high-conviction reports become tradeable.',
+              patch: { risk: 'CONSERVATIVE', style: 'EVENT_DRIVEN', horizon: 'SWING', minConfidence: 0.65, minNetEdge: 0.008, maxPositionPct: 0.10 },
+            },
+          ].map(preset => (
+            <button
+              key={preset.id}
+              className="btn ghost sm"
+              title={preset.title}
+              onClick={() => setSession(s => ({ ...s, memory: { ...s.memory, preferences: { ...s.memory.preferences, ...preset.patch } } }))}
+              style={{ fontSize: 11 }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
         <div className="settings-grid">
           <label>
             <small>Paper capital (USD)</small>
@@ -2211,17 +2246,17 @@ function SettingsPage({ session, setSession, onReset, user, setPage }) {
           </label>
           <label>
             <small>Minimum confidence (%)</small>
-            <input type="number" step="5" min="40" max="95"
-              value={Math.round((prefs.minConfidence ?? 0.6) * 100)}
-              onChange={e => setPctPref('minConfidence', e.target.value, 40, 95)} />
-            <em className="field-hint">Reports below this confidence are flagged Sit-Out.</em>
+            <input type="number" step="5" min="20" max="95"
+              value={Math.round((prefs.minConfidence ?? 0.5) * 100)}
+              onChange={e => setPctPref('minConfidence', e.target.value, 20, 95)} />
+            <em className="field-hint">Reports below this confidence are flagged Sit-Out. Lower it to see more directional reads.</em>
           </label>
           <label>
             <small>Minimum net edge (bps)</small>
-            <input type="number" step="5" min="0" max="1000"
-              value={Math.round((prefs.minNetEdge ?? 0.005) * 10000)}
-              onChange={e => setBpsPref('minNetEdge', e.target.value, 0, 1000)} />
-            <em className="field-hint">Required expected return after friction. 1% = 100 bps.</em>
+            <input type="number" step="5" min="-500" max="1000"
+              value={Math.round((prefs.minNetEdge ?? 0) * 10000)}
+              onChange={e => setBpsPref('minNetEdge', e.target.value, -500, 1000)} />
+            <em className="field-hint">Required expected return after friction. Negative values let low-vol equities produce trades when friction eats the edge. 1% = 100 bps.</em>
           </label>
           <label>
             <small>Max position size (% of capital)</small>

@@ -4,7 +4,7 @@
 
 ### Trade the information, not just the chart.
 
-[![Live Demo](https://img.shields.io/badge/Live-nightwatchai.up.railway.app-0ea5e9?style=flat-square)](https://nightwatchai.up.railway.app)
+[![Live Demo](https://img.shields.io/badge/Live-nightwatchai.watch-0ea5e9?style=flat-square)](https://nightwatchai.watch)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![React](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![Tests](https://img.shields.io/badge/tests-93%2F93%20passing-brightgreen?style=flat-square)](#testing)
@@ -51,7 +51,7 @@ NIGHTWATCH AI is a natural-language AI trading research workstation. The trader 
 
 The hackathon-critical claim: *AI extracts, synthesizes, and challenges; the trader decides.* Autonomous fills look impressive in demos and fail the human-in-the-loop contract.
 
-**Live at [nightwatchai.up.railway.app](https://nightwatchai.up.railway.app)** (custom domain migration in progress to `nightwatchai.watch`).
+**Live at [nightwatchai.watch](https://nightwatchai.watch).**
 
 ---
 

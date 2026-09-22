@@ -263,24 +263,52 @@ function App({ authUser: signedInUser, onSignedOut }) {
     return () => { alive = false }
   }, [])
 
+  // Reconciliation: on every session update, ensure every OPEN local position
+  // has a server-side reservation. This catches:
+  //   (a) new APPROVEs (redundant with the /paper/reserve call in decide(),
+  //       but the server is idempotent so it's free insurance);
+  //   (b) legacy positions that were opened before the reserve-on-approve flow
+  //       shipped — without this pass they'd show as OPEN LOCAL but the
+  //       Portfolio strip would keep saying "FREE = starting capital".
+  // The server is idempotent by position id, so a re-fire is a no-op.
+  const reservedRef = useRef(new Set())
+  useEffect(() => {
+    if (!hasApi() || !authToken) return
+    for (const p of session.positions || []) {
+      if (p.status !== 'OPEN') continue
+      if (reservedRef.current.has(p.id)) continue
+      const amountUsd = Number(p.notional)
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) continue
+      reservedRef.current.add(p.id)
+      fetch(apiUrl('/paper/reserve'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ amountUsd, sourceId: p.id }),
+        signal: AbortSignal.timeout(6000),
+      }).catch(() => { reservedRef.current.delete(p.id) /* retry on next render — server is idempotent */ })
+    }
+  }, [session.positions, authToken])
+
   // When a self-directed paper position transitions to CLOSED — whether via
-  // CLOSE AT MARK or an auto stop/target hit inside the ticker loop — credit
-  // the realized $ PnL to the user's server paper account. The server is
-  // idempotent by position id, so this effect can safely re-fire and cannot
-  // double-credit even if the browser re-renders.
+  // CLOSE AT MARK or an auto stop/target hit inside the ticker loop — release
+  // the reserved capital back to `freeCapital` AND credit the realized P&L to
+  // `totalPnl`. `/paper/release` handles both atomically and is idempotent by
+  // position id, so this effect can safely re-fire and cannot double-count
+  // even if the browser re-renders.
   const creditedRef = useRef(new Set())
   useEffect(() => {
     if (!hasApi() || !authToken) return
     for (const p of session.positions || []) {
       if (p.status !== 'CLOSED') continue
       if (creditedRef.current.has(p.id)) continue
-      const amountUsd = Number(p.pnl)
-      if (!Number.isFinite(amountUsd)) continue
+      const realizedPnl = Number(p.pnl)
+      const notional = Number(p.notional)
+      if (!Number.isFinite(realizedPnl)) continue
       creditedRef.current.add(p.id)
-      fetch(apiUrl('/paper/credit'), {
+      fetch(apiUrl('/paper/release'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ amountUsd, sourceId: p.id }),
+        body: JSON.stringify({ amountUsd: notional, realizedPnl, sourceId: p.id }),
         signal: AbortSignal.timeout(6000),
       }).catch(() => { creditedRef.current.delete(p.id) /* retry on next render — server is idempotent */ })
     }
@@ -548,7 +576,24 @@ function App({ authUser: signedInUser, onSignedOut }) {
     try {
       const next = applyTraderDecision(s, report, { action, overrides })
       setSession(next)
-      if (action === 'APPROVE') notify(`Paper order filled · ${report.symbol}`)
+      if (action === 'APPROVE') {
+        notify(`Paper order filled · ${report.symbol}`)
+        // Reserve the notional from the server-side paper account so the
+        // Portfolio strip's FREE / ALLOCATED numbers reflect the open trade.
+        // Fire-and-forget: idempotent server-side by position id, so a retry
+        // or double-click cannot double-debit. Only runs when signed in.
+        if (hasApi() && authToken) {
+          const openedPosition = next.positions?.find(p => p.id === next.pendingPositionId)
+          if (openedPosition) {
+            fetch(apiUrl('/paper/reserve'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+              body: JSON.stringify({ amountUsd: openedPosition.notional, sourceId: openedPosition.id }),
+              signal: AbortSignal.timeout(6000),
+            }).catch(() => { /* server is idempotent — a retry-on-next-load also works */ })
+          }
+        }
+      }
       else if (action === 'REJECT') notify(`Rejected · ${report.symbol}`)
       else notify(`Sit-out logged · ${report.symbol}`)
     } catch (err) { notify(err.message) }

@@ -54,7 +54,7 @@ import { shareReport, readSharedByToken } from './sharing.mjs'
 import { analyzePortfolio, correlationToBtc } from './copilot.mjs'
 import * as Playbooks from './playbooks.mjs'
 import * as Allocations from './allocations.mjs'
-import { paperSnapshot, resetPaperAccount, creditPnl } from './paper.mjs'
+import { paperSnapshot, resetPaperAccount, creditPnl, reserveForPosition, releaseAndCredit } from './paper.mjs'
 import { chat as assayerChat } from './assayer.mjs'
 import { buildLiveContext, liveUniverseStatus, getMacro } from './market-context.mjs'
 import { mailerStatus } from './lib/mailer.mjs'
@@ -811,6 +811,31 @@ const server = http.createServer(async (req, res) => {
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
       try {
         const result = creditPnl(user.id, Number(body?.amountUsd), body?.sourceId)
+        return json(res, 200, result)
+      } catch (err) { return json(res, 400, { error: err.message }) }
+    }
+    // Reserve paper capital when the trader APPROVES a research report. This
+    // debits `freeCapital` and increases `allocatedCapital` so the Portfolio
+    // panel's PAPER CAPITAL / FREE / ALLOCATED strip correctly reflects the
+    // open self-directed trade — not just Playbook allocations.
+    if (route === 'POST /paper/reserve') {
+      const user = requireAuth(req, res); if (!user) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const result = reserveForPosition(user.id, body?.sourceId, Number(body?.amountUsd))
+        return json(res, 200, result)
+      } catch (err) { return json(res, 400, { error: err.message }) }
+    }
+    // Release + credit — called on CLOSE-AT-MARK. Returns reserved capital
+    // to `freeCapital`, decrements `allocatedCapital`, and folds realized
+    // P&L into `totalPnl`. Idempotent per sourceId. Backwards-compatible for
+    // positions that were opened before /paper/reserve existed (no reservation
+    // to return, just credits P&L).
+    if (route === 'POST /paper/release') {
+      const user = requireAuth(req, res); if (!user) return
+      let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
+      try {
+        const result = releaseAndCredit(user.id, body?.sourceId, Number(body?.amountUsd), Number(body?.realizedPnl))
         return json(res, 200, result)
       } catch (err) { return json(res, 400, { error: err.message }) }
     }

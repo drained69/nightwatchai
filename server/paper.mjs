@@ -135,6 +135,69 @@ export function resetPaperAccount(userId) {
   return pa
 }
 
+/**
+ * Reserve capital for a trader-approved paper position from a research report.
+ * Idempotent by sourceId (the paper position id) so a client retry or double
+ * APPROVE click cannot double-debit the account. Returns the current snapshot
+ * on a duplicate call instead of throwing.
+ */
+export function reserveForPosition(userId, sourceId, amountUsd) {
+  const user = getUser(userId)
+  if (!user) throw new Error('user not found')
+  const key = String(sourceId || '')
+  if (!key) throw new Error('sourceId required')
+  const reservations = new Set(user.paperReservations || [])
+  if (reservations.has(key)) return { reserved: false, reason: 'already-reserved', paper: paperSnapshot(userId) }
+  const next = reserveCapital(userId, amountUsd)
+  reservations.add(key)
+  const kept = Array.from(reservations)
+  const trimmed = kept.length > 1000 ? kept.slice(-1000) : kept
+  upsertUser({ ...getUser(userId), paperReservations: trimmed })
+  logger.info({ userId, sourceId: key, amountUsd, newFree: next.freeCapital, newAllocated: next.allocatedCapital }, 'paper capital reserved')
+  return { reserved: true, paper: paperSnapshot(userId) }
+}
+
+/**
+ * Release capital + credit realized P&L for a closed paper position. Combines
+ * releaseCapital + creditPnl into one idempotent operation (by sourceId) so a
+ * CLOSE-AT-MARK on a research-approved trade cleanly returns the reserved
+ * capital AND folds the P&L into totalPnl in a single hop.
+ *
+ * Backwards-compatible: if there is no reservation for `sourceId` (position
+ * opened before the reserve-on-approve flow shipped, or a legacy /paper/credit
+ * caller), only the P&L is credited — no allocatedCapital change.
+ */
+export function releaseAndCredit(userId, sourceId, amountUsd, realizedPnl) {
+  const user = getUser(userId)
+  if (!user) throw new Error('user not found')
+  const pa = paperAccount(userId)
+  if (!pa) throw new Error('paper account not found')
+  const key = String(sourceId || '')
+  if (!key) throw new Error('sourceId required')
+  const credits = new Set(user.paperCredits || [])
+  if (credits.has(key)) return { credited: false, reason: 'already-applied', paper: paperSnapshot(userId) }
+
+  const pnl = Number.isFinite(Number(realizedPnl)) ? Number(realizedPnl) : 0
+  const reserved = Number.isFinite(Number(amountUsd)) ? Number(amountUsd) : 0
+  const hadReservation = (user.paperReservations || []).includes(key)
+  // Return the reserved capital (if any) + fold P&L into totalPnl. When no
+  // reservation was on record we still credit P&L for backwards compat.
+  const capitalReturn = hadReservation ? reserved : 0
+  const next = {
+    ...pa,
+    freeCapital:       Number((pa.freeCapital + capitalReturn + pnl).toFixed(2)),
+    allocatedCapital:  Number(Math.max(0, pa.allocatedCapital - capitalReturn).toFixed(2)),
+    totalPnl:          Number((pa.totalPnl + pnl).toFixed(2)),
+  }
+  credits.add(key)
+  const reservations = (user.paperReservations || []).filter(k => k !== key)
+  const kept = Array.from(credits)
+  const trimmed = kept.length > 1000 ? kept.slice(-1000) : kept
+  upsertUser({ ...user, paperAccount: next, paperCredits: trimmed, paperReservations: reservations })
+  logger.info({ userId, sourceId: key, amountUsd: pnl, capitalReleased: capitalReturn, newFree: next.freeCapital, newAllocated: next.allocatedCapital, newPnl: next.totalPnl }, 'paper position released')
+  return { credited: true, delta: pnl, capitalReleased: capitalReturn, paper: paperSnapshot(userId) }
+}
+
 /** Combined view for the UI. */
 export function paperSnapshot(userId) {
   const pa = paperAccount(userId)

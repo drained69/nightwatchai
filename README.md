@@ -115,12 +115,14 @@ Grouped by product pillar. Every row below is live in production.
 | **Thesis Lab** | Trader submits any thesis in plain English; the engine returns a steelman, a counter, five stress tests, and a pre-vs-post confidence delta. |
 | **Portfolio Copilot** | Per-position Pearson correlation to BTC from cached real hourly returns, factor clustering, sector-concentration warnings. |
 | **Persona-tuned signals** | Risk profile + trading style + horizon preferences fold into composite threshold, skill weights, sizing, and target multiple. |
+| **One-click gate presets** | Settings → Trader profile ships three presets — Aggressive · demo-friendly, Balanced · out-of-box, Conservative · pro — each a single patch to risk profile, trading style, horizon, minimum confidence, minimum net edge, and max position size. |
 
 ### Trading
 
 | Capability | Implementation |
 |---|---|
 | **Paper-first by default** | Every user starts with $10,000 of virtual capital. `applyTraderDecision` throws unless `settings.paperOnly !== true`. |
+| **Server-authoritative capital ledger** | APPROVE reserves the trade's notional from `freeCapital` into `allocatedCapital` server-side; CLOSE releases the reservation and folds realized P&L into `totalPnl` in one atomic, idempotent operation. The Portfolio strip's PAPER CAPITAL / FREE / ALLOCATED numbers reflect every self-directed trade, not just followed Playbooks. |
 | **Paper positions marked to real tape** | Every open paper position is marked to the live Bitget WebSocket price on every tick. Realized and unrealized P&L are computed from the real fills, not simulated. |
 | **One-click "COPY TO PAPER PORTFOLIO"** | Every research report ships with an Action Summary card exposing verdict + plan + one-click paper approval, plus REJECT / SIT-OUT and a deep-link to trade on Bitget. |
 | **Live routing (opt-in)** | `ROUTE TO AGENTIC ACCOUNT (LIVE)` button on approved reports routes real orders through **Bitget's Unified Trading Account (UTA v3)** API into the operator's **Agentic Account** — the isolated Agent Hub sub-account authorized via OAuth, separate from the operator's main funds and capped by daily limits set on Agent Hub. |
@@ -550,6 +552,16 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | POST | `/share/report` | Create signed public URL for any report (30-day expiry) | JWT |
 | GET | `/share/report/:token` | Read a shared report | — |
 
+### Paper Account
+
+| Method | Path | Purpose | Auth |
+|---|---|---|---|
+| GET | `/paper` | Snapshot: starting/free/allocated capital, total P&L | JWT |
+| POST | `/paper/reserve` | Reserve capital for an approved research position (idempotent by position id) | JWT |
+| POST | `/paper/release` | Release reserved capital + credit realized P&L on close (idempotent by position id) | JWT |
+| POST | `/paper/credit` | Legacy P&L-only credit, kept for backwards compatibility | JWT |
+| POST | `/paper/reset` | Reset the account back to starting capital | JWT |
+
 ### Portfolio Copilot
 
 | Method | Path | Purpose | Auth |
@@ -653,7 +665,10 @@ server/
   market-context.mjs      live universe builder
   live-enhance.mjs        report overlay — positioning, book depth, intel
   history.mjs             deep-paged real candle cache (18 assets)
-  alerts.mjs · copilot.mjs · paper.mjs · playbooks.mjs · allocations.mjs ·
+  paper.mjs               server-authoritative paper capital ledger —
+                          idempotent reserve/release by position id,
+                          atomic P&L credit on close
+  alerts.mjs · copilot.mjs · playbooks.mjs · allocations.mjs ·
   assayer.mjs · sharing.mjs · signal-history.mjs
   nightwatch02.mjs        Alpha of the Day pipeline
   nightwatch02-scheduler.mjs · nightwatch02-subscriptions.mjs

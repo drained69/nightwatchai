@@ -13,16 +13,19 @@ services:
     environment:
       # ---- required in production ----
       JWT_SECRET: "${JWT_SECRET:-change_me_use_openssl_rand_base64_48}"
-      # ---- optional: LLM narration ----
+      # ---- optional: LLM narration (Qwen is first-priority, then these) ----
+      QWEN_API_KEY: "${QWEN_API_KEY:-}"
       XAI_API_KEY: "${XAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      # ---- optional: Bitget MCP sidecar for live bitget-signal skills ----
+      # ---- Bitget Signal MCP: connects to Bitget's own hosted MCP by default,
+      #      no sidecar needed. Only set BITGET_MCP_URL to point at a private one. ----
       BITGET_MCP_URL: "${BITGET_MCP_URL:-}"
-      # ---- optional: Bitget Agent Account OAuth (for live paper routing) ----
+      # ---- optional: Bitget Agentic Account OAuth (for live UTA v3 order routing) ----
       BITGET_OAUTH_CLIENT_ID: "${BITGET_OAUTH_CLIENT_ID:-}"
       BITGET_OAUTH_CLIENT_SECRET: "${BITGET_OAUTH_CLIENT_SECRET:-}"
       BITGET_OAUTH_REDIRECT_URI: "${BITGET_OAUTH_REDIRECT_URI:-}"
+      BITGET_LIVE_ENABLED: "${BITGET_LIVE_ENABLED:-0}"
       # ---- tuning ----
       RATE_RESEARCH: "60"
       NEWS_ENABLED: "1"
@@ -42,14 +45,6 @@ services:
       timeout: 5s
       retries: 3
 
-  # Optional: run the Bitget Agent Hub MCP sidecar alongside NIGHTWATCH so
-  # bitget-signal skills come from Bitget MCP instead of our local pack.
-  # Uncomment when you have Bitget Agent Hub installed and adjust the image.
-  #
-  # bitget-mcp:
-  #   image: ghcr.io/bitgetlimited/agent-hub-mcp:latest
-  #   container_name: bitget-mcp
-  #   restart: unless-stopped
-  #   ports:
-  #     - "9091:9091"
-  #   command: ["mcp", "serve", "--port", "9091"]
+  # No Bitget MCP sidecar service needed here: server/providers/bitget-mcp.mjs
+  # connects directly to Bitget's own hosted Signal MCP on boot. Set
+  # BITGET_MCP_URL above only if you want to point at a private MCP instead.

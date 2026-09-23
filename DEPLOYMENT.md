@@ -39,7 +39,7 @@ Then open `http://localhost:8787`. You get:
 If you don't want Docker:
 
 ```bash
-npm run build && npm run serve &       # API + SPA served together on 8787
+npm run build && npm start &           # API + SPA served together on 8787
 ```
 
 (`npm run server` starts the API alone — use it for development next to `npm run dev`.)
@@ -55,40 +55,45 @@ Copy `.env.example` to `.env` and fill:
 | Variable | Purpose | Required for | Where to get it |
 |---|---|---|---|
 | `JWT_SECRET` | HMAC secret for auth tokens | Production auth | `openssl rand -base64 48` |
-| `XAI_API_KEY` | Grok narration + news classifier | LLM narration | https://x.ai/api |
+| `QWEN_API_KEY` | Qwen narration + news classifier (first-priority provider) | LLM narration | Bitget hackathon endpoint |
+| `XAI_API_KEY` | Grok narration + news classifier | Fallback LLM | https://x.ai/api |
 | `ANTHROPIC_API_KEY` | Claude narration + news classifier | Fallback LLM | https://console.anthropic.com |
 | `OPENAI_API_KEY` | GPT narration + news classifier | Fallback LLM | https://platform.openai.com |
-| `BITGET_MCP_URL` | Route the 5 bitget-signal skills to Bitget MCP | Live research | Run `bgc mcp serve --port 9091` locally, or the docker-compose sidecar (see below) |
-| `BITGET_OAUTH_CLIENT_ID` | Bitget Agentic Account OAuth | Live paper routing | Apply at https://www.bitget.com/api-management for an agent-account app |
+| `BITGET_MCP_ENABLED` | Set to `0` to disable the Signal MCP client entirely | Optional | — |
+| `BITGET_MCP_URL` | Override the Bitget Signal MCP endpoint | Optional — defaults to Bitget's own hosted MCP, no setup needed | Only set this if you're running a private sidecar |
+| `BITGET_WS_ENABLED` | Set to `0` to disable the public WebSocket client (REST-only fallback) | Optional | — |
+| `BITGET_BASE_URL` | Point Bitget REST calls at the Cloudflare Worker relay (`relay/`) instead of `api.bitget.com` | Optional — only needed if your host's IPs get WAF-blocked by Bitget | See `relay/README.md` |
+| `BITGET_RELAY_KEY` | Shared secret sent as `x-relay-key` when using the relay | Required if `BITGET_BASE_URL` points at the relay | Set when you deploy the Worker |
+| `BITGET_OAUTH_CLIENT_ID` | Agent Hub OAuth for the operator's Agentic Account | Live UTA v3 order routing | Apply at https://www.bitget.com/api-management for an Agent Hub app |
 | `BITGET_OAUTH_CLIENT_SECRET` | ↑ | ↑ | ↑ |
 | `BITGET_OAUTH_REDIRECT_URI` | ↑ | ↑ | Your production URL + `/auth/oauth/bitget/callback` |
+| `BITGET_LIVE_ENABLED` | Set to `1` to actually enable order routing (in addition to the OAuth vars above) | Live UTA v3 order routing | — |
+| `RESEND_API_KEY` | Email OTP sign-in + Alpha of the Day delivery | Email | https://resend.com |
+| `EMAIL_FROM` | Domain-verified sender address | Production email | Resend dashboard |
+| `APP_URL` | Absolute URL used in email links | Recommended for email | Your production URL |
 | `CORS_ORIGIN` | Restrict browser access | Production | Your SPA origin, e.g. `https://nightwatch.example.com` |
 | `NIGHTWATCH_DATA_DIR` | Where per-user JSON files land | Persistence | Default `./data`; mount a volume in prod |
 | `LOG_LEVEL` | Log verbosity | Ops | `info` default; `warn` for prod |
 | `RATE_RESEARCH` | Requests / minute per key | Abuse control | Default 60 |
 | `NEWS_POLL_MS` | RSS poll interval | Feed freshness | Default 60000 |
-| `PRICES_TICK_MS` | Price tick broadcast interval | Feed freshness | Default 10000 |
+| `PRICES_TICK_MS` | Price tick broadcast interval (fallback cadence when WS is down) | Feed freshness | Default 10000 |
 
 **Never set any of these as `VITE_*`.** Those get baked into the browser bundle.
 
 ---
 
-## 3 · Bitget MCP sidecar for live `bitget-signal` skills 🟡
+## 3 · Bitget Signal MCP — works out of the box 🟢
 
-This is the highest-value integration for the Track 3 story.
+Unlike earlier revisions of this doc, **no sidecar setup is required.** `server/providers/bitget-mcp.mjs` is a real Streamable-HTTP MCP client that connects directly to Bitget's own hosted signal MCP (`datahub.noxiaohao.com/mcp` — the same endpoint the official `@bitget-ai/bitget-signal` npm package registers into Claude Code / Cursor / Windsurf) on boot, with no credentials needed. 19 tools are reachable immediately.
+
+Verify it's connected:
 
 ```bash
-# Install the Bitget Agent Hub CLI
-npm i -g @bitget/agent-hub-cli
-# Enumerate available skills (no API key needed for bitget-signal)
-bgc discover
-# Serve the MCP as HTTP on 9091
-bgc mcp serve --port 9091
+curl http://localhost:8787/bitget/status
+# { "connected": true, "model": "market-data-mcp", "skills": [...19 tools...] }
 ```
 
-Then set `BITGET_MCP_URL=http://127.0.0.1:9091` in your `.env` and restart NIGHTWATCH. The sidebar badge flips from `LIVE PRICES · DEMO NEWS` to `BITGET MCP · LIVE` and `/bitget/status` reports `{ connected: true, skills: [...] }`.
-
-The uncommented compose service in `docker-compose.yml` shows how to run this alongside NIGHTWATCH.
+The sidebar shows `BITGET MCP · LIVE` once the handshake completes (usually 1-3 seconds after boot). If you want to point at a **private** MCP sidecar instead of Bitget's hosted one, set `BITGET_MCP_URL` to override the default — but for the hackathon deployment, leave it unset.
 
 ---
 
@@ -118,27 +123,32 @@ CREATE TABLE push_subs    (user_id TEXT PRIMARY KEY REFERENCES users(id), endpoi
 
 ---
 
-## 5 · Real live paper trading via Bitget Agentic Account 🟡
+## 5 · Live order routing via Bitget Agentic Account (UTA v3) 🟡
 
-The Agentic Account is Bitget's OAuth-scoped sub-account: fund isolation, quota cap, no withdrawals, no manual API key. Perfect for this product.
+The Agentic Account is Bitget's OAuth-scoped sub-account: fund isolation, quota cap, no withdrawals, no manual API key. The full flow is built and wired — this section is just the credential checklist to turn it on.
 
-**What I built already:** `server/lib/auth.mjs` has the OAuth-callback function scaffolded — it throws with a helpful message until you set `BITGET_OAUTH_CLIENT_ID/SECRET/REDIRECT_URI`.
+**Already built and shipped** in `server/providers/bitget-trading.mjs`:
+`buildAuthorizeUrl` · `exchangeCodeForToken` · `refreshAccessToken` · `storeUserToken` · `getValidAccessToken` · `submitLiveOrder` (routes through Bitget's UTA v3 API) · `killSwitch` (cancel-all + revoke). Wired end-to-end into `server/adapter.mjs` (`/auth/oauth/bitget/start`, `/auth/oauth/bitget/callback`, `/trading/status`, `/trading/order`, `/trading/kill`) and into the SPA — a "Connect Agentic Account" button and a "Route to Agentic Account (LIVE)" button with a per-order confirm modal, both in Settings and on every approved research report.
 
-**What you still need to do:**
+`isLiveEnabled()` gates the whole path: it returns `false` — and every code path stays paper-only — until **both** `BITGET_LIVE_ENABLED=1` **and** the three OAuth vars below are set. This is a deliberate double-gate so a stray env var can't silently turn on live trading.
 
-1. Apply for an agent-account OAuth app at https://www.bitget.com/api-management.
+**What you need to do to turn it on:**
+
+1. Apply for an Agent Hub OAuth app at https://www.bitget.com/api-management.
 2. Register your production origin as an approved redirect URI.
-3. Paste the client id + secret into `.env`.
-4. Uncomment the real Bitget token exchange in `server/lib/auth.mjs::bitgetOauthCallback`. Bitget's docs give the exact request shape; the scaffold shows where.
-5. Add the order-submission call in `applyTraderDecision` (currently paper-only): when `session.provider.bitgetLive === true` and the user has an agent-account token, POST to Bitget's `/v3/agent/orders` endpoint. **Keep the trader-Approve requirement** — never auto-fill.
+3. Paste `BITGET_OAUTH_CLIENT_ID`, `BITGET_OAUTH_CLIENT_SECRET`, `BITGET_OAUTH_REDIRECT_URI` into `.env`.
+4. Set `BITGET_LIVE_ENABLED=1`.
+5. Restart. `GET /trading/status` (JWT-authed) now reports `liveEnabled: true`; the "Connect Agentic Account" button appears in Settings.
 
-Test with the `--paper-trading` flag exposed by `bgc`. Only go live after your legal review (§9).
+Per-order Trader Approve is enforced both client-side (confirm modal) and server-side (`confirm: true` required in the request body) — this cannot be bypassed by a client bug. Test with a small notional first. Only take on real user funds after your legal review (§9).
 
 ---
 
 ## 6 · Web Push notifications 🟡
 
-The service worker is already wired. To send pushes:
+**Fully built and shipped** — `server/lib/push.mjs` uses the `web-push` package to deliver real pushes via `sendPush(userId, payload)` and `deliverToAll(payload)`. The news pipeline calls `shouldPushForUser()` on every ingested item and fires a push automatically when a HIGH-relevance headline touches a user's watchlist or open positions. Nothing left to wire — this section is just how to configure your own VAPID keys instead of the auto-generated ones.
+
+VAPID keys auto-generate on first boot if you don't set your own (`server/lib/push.mjs` calls `webpush.generateVAPIDKeys()` as a fallback). To pin your own for a stable production identity:
 
 ```bash
 # Generate a VAPID key pair once
@@ -149,9 +159,7 @@ VAPID_PRIVATE_KEY=...
 VAPID_SUBJECT=mailto:you@example.com
 ```
 
-Then install a push-sending dep (`npm i web-push`) and add a small `sendPush(userId, payload)` helper in `server/lib/push.mjs` that iterates `listPushSubscriptions()` and posts to each. Trigger from the news classifier when a HIGH-severity item touches a user's watchlist/positions.
-
-**Delivery is scaffolded; the send call is not.** Two hours of work with the `web-push` package.
+Without pinned keys, subscriptions break on every restart (the auto-generated key pair changes) — pin these before you have real subscribers.
 
 ---
 
@@ -191,24 +199,28 @@ In-process sliding-window limiter is on. For real traffic put NIGHTWATCH behind 
 
 ---
 
-## 10 · Deploy to a real cloud 🔴 (you pick + configure)
+## 10 · Deploy to a real cloud
 
-The Docker image works anywhere. Pick one:
+The Docker image works anywhere. This hackathon's live deployment (https://nightwatchai.watch) runs on **Railway** — that path is verified and running today. The others below are equally viable but untested by this project.
 
-### Fly.io (simplest)
+### Railway ✅ (what's actually running in production)
+
+```bash
+railway up
+```
+
+Point Railway at the repo, add the secrets from §2 in the Railway dashboard, add a volume mount at `/data`, then attach your custom domain under the service's Settings → Domains. ~$5/mo. Bitget's WAF blocks some shared datacenter IP ranges — if you see 403s on Bitget REST calls from your Railway deployment, route through the Cloudflare Worker relay in `relay/` (`BITGET_BASE_URL` + `BITGET_RELAY_KEY`).
+
+### Fly.io 🔴 (untested alternative)
 
 ```bash
 fly launch                  # generates fly.toml
 fly volumes create nw_data --size 5
-fly secrets set JWT_SECRET=... XAI_API_KEY=... BITGET_MCP_URL=...
+fly secrets set JWT_SECRET=... QWEN_API_KEY=... RESEND_API_KEY=...
 fly deploy
 ```
 
 Fly gives you a global anycast address + volume + secrets management for ~$5/mo.
-
-### Railway
-
-Point Railway at the repo, add secrets, deploy. Add a volume mount at `/data`. ~$5/mo.
 
 ### AWS ECS / Fargate
 
@@ -250,7 +262,7 @@ A junior can wire this in a day using Stripe's official Node SDK.
 - [ ] `curl https://your-domain/metrics | grep nightwatch_requests_total` climbs as you use the SPA.
 - [ ] Sentry receives a test error (`throw` in a dev build).
 - [ ] Web Push notification arrives on your device.
-- [ ] `/auth/dev-login` disabled in production (guard with `NODE_ENV !== 'production'`) — TODO in `server/lib/auth.mjs`.
+- [ ] `/auth/dev-login` disabled in production — already guarded in `server/adapter.mjs` (`NODE_ENV === 'production' && ALLOW_DEV_LOGIN !== '1'` → 403); just confirm you haven't set `ALLOW_DEV_LOGIN=1` on your production env.
 - [ ] JWT_SECRET is set (`/health` logs a warning if not).
 - [ ] Legal review complete.
 - [ ] Geo-block active on Bitget-restricted regions.
@@ -260,14 +272,12 @@ A junior can wire this in a day using Stripe's official Node SDK.
 
 ## 13 · What I did **not** build
 
-Being explicit about the gap so you can plan the last mile:
+Being explicit about the real gap so you can plan the last mile. (Live Bitget order routing, the Signal MCP client, the WebSocket tick stream, and Web Push delivery are all fully built and shipped — see §3, §5, and §6 above; they used to be listed here as gaps in an earlier revision of this doc, they aren't anymore.)
 
-- **Real Bitget order routing** — scaffolded, but the actual REST call to Bitget's order endpoint isn't in the code because I don't have a Bitget business account or the exact endpoint the Agent Account exposes for third-party OAuth. The seam is `applyTraderDecision` in `src/domain.js` — replace `PaperExecution.submit()` there with a call to your Bitget adapter.
 - **Stripe billing** — no code.
-- **Google/Bitget OAuth exchange** — dev-login works, OAuth callback throws until credentials are set.
 - **Sentry / Datadog wiring** — install-time, ~30 lines each.
 - **Postgres migration** — swap `server/lib/store.mjs`.
-- **Legal copy** — placeholder that you should replace with lawyer-reviewed text.
-- **Deployment configuration for your specific cloud** — Docker + docker-compose here; you pick the host.
+- **Legal copy** — the disclaimer modal + footer text is real copy, not a placeholder, but you should still have a lawyer confirm it's defensible in your target jurisdictions.
+- **Deployment configuration for your specific cloud** — Docker + docker-compose here; you pick the host. The live deployment for this hackathon runs on Railway with a custom domain — see §10.
 
 Everything else — the entire product loop, live prices, live news, streaming, auth, persistence, rate limits, logs, metrics, PWA, backtest, error handling — is real code you can ship today.

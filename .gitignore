@@ -1,17 +1,29 @@
 # Dependencies
 node_modules/
+# This repo pins npm (package-lock.json is tracked) — a stray alternate
+# lockfile means someone ran the wrong package manager against this repo.
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
 
 # Build output
 dist/
 build/
+*.local.js
+vite.config.*.timestamp-*
 
 # Runtime data (contains keys, history, user state)
 data/
 
-# Environment
+# Environment — never let a real secret slip in under a variant name.
 .env
 .env.*
 !.env.example
+.dev.vars
+*.pem
+*.key
+*.crt
+*.p12
 
 # Logs
 *.log
@@ -27,10 +39,29 @@ coverage/
 
 # OS / editor
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # Caches
 .vite/
 *.tsbuildinfo
+.eslintcache
+.cache/
+
+# Cloudflare Worker (relay/) — wrangler's local dev cache + local-only vars,
+# generated only if you run `wrangler dev` locally; the deployed worker
+# config itself has no secrets checked in.
+relay/.wrangler/
+relay/.dev.vars
+
+# Editor project files (rare in this repo, cheap to guard against)
+*.sublime-project
+*.sublime-workspace

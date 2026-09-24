@@ -1030,6 +1030,37 @@ function buildChangeConditions(symbol, market, signal, skills) {
 }
 
 /**
+ * Cross-asset risk language, keyed to the traded asset's CLASS.
+ *
+ * Crypto names live and die on BTC. Tokenized U.S. equities live and die on
+ * the equity macro tape — Nasdaq / S&P direction and the VIX — NOT on BTC.
+ * An NVDA long does not become wrong because bitcoin dropped 3%; wiring BTC
+ * into an equity's invalidation is a crypto-brain leak. This helper returns
+ * the correct direction-aware killer + stress-shock language per class so the
+ * invalidation section, the stress table, and the risk list all speak the
+ * right cross-asset for the symbol being researched.
+ */
+function crossAssetRisk(market) {
+  if (market?.class === 'crypto') {
+    return {
+      driver:      'BTC',
+      longKiller:  'BTC 24h ≤ −3% (broad crypto risk-off)',
+      shortKiller: 'BTC 24h ≥ +3% (broad crypto risk-on)',
+      shockLabel:  'BTC 24h ≤ −4% risk-off',
+      regimeNote:  'DXY up / VIX up / BTC down',
+    }
+  }
+  // Tokenized U.S. equity (and any non-crypto fallback).
+  return {
+    driver:      'equity macro tape',
+    longKiller:  'Nasdaq / S&P sell off with VIX spiking (broad equity risk-off)',
+    shortKiller: 'Nasdaq / S&P rally with VIX collapsing (broad equity risk-on)',
+    shockLabel:  'Nasdaq −2% / VIX +15% risk-off session',
+    regimeNote:  'DXY up / VIX up / Nasdaq down',
+  }
+}
+
+/**
  * Invalidation conditions — direction-aware. What kills a LONG (broad risk-off
  * / structural breakdown / adverse catalyst) is the OPPOSITE of what kills a
  * SHORT. The prior implementation keyed the EMA and BTC conditions off `trend`
@@ -1039,15 +1070,12 @@ function buildChangeConditions(symbol, market, signal, skills) {
 function buildInvalidationConditions(symbol, market, signal, taData, newsData) {
   const dir = signal.direction
   const isLong = dir === 'LONG'
-  const isCrypto = market.class === 'crypto'
 
   // Cross-asset condition: LONG dies on broad risk-off, SHORT dies on broad
-  // risk-on. Copy adapts to whether the traded asset IS BTC or is an equity
-  // referencing BTC as its risk proxy.
-  const crossAsset = isCrypto
-    ? (isLong ? 'BTC 24h ≤ −3%' : 'BTC 24h ≥ +3%')
-    : (isLong ? 'BTC 24h ≤ −3% (risk-off cross-asset flips against the long)'
-              : 'BTC 24h ≥ +3% (risk-on cross-asset flips against the short)')
+  // risk-on — expressed in the asset's OWN risk domain (BTC for crypto, the
+  // equity macro tape for tokenized equities).
+  const ca = crossAssetRisk(market)
+  const crossAsset = isLong ? ca.longKiller : ca.shortKiller
 
   // Structural condition: LONG dies below EMA20 (trend break), SHORT dies
   // above EMA20 (trend break). This must key off the TRADE DIRECTION, not off
@@ -1080,9 +1108,13 @@ function buildStressTests(symbol, market, signal, skills) {
   const mi = skills.find(s => s.skill === 'market-intel')
   const atr = market?.atrPct ?? ta?.data?.atrPct ?? 1
   const dir = signal.direction === 'SHORT' ? -1 : 1
+  const ca = crossAssetRisk(market)
   return [
     { name: 'Adverse 2× ATR shock',            shock: `${(atr * 2).toFixed(1)}% against the trade`,           expectedMovePct: -Number((atr * 2 / 100).toFixed(4)), survives: (atr * 2 / 100) < 0.06 },
-    { name: 'Cross-asset reversal',             shock: 'BTC 24h ≤ −4% risk-off',                                expectedMovePct: -0.03,                              survives: market?.class === 'tokenized-equity' },
+    // A broad risk-off session (in the asset's OWN risk domain) is thesis-level:
+    // it hurts a long and helps a short. `survives` is computed after the
+    // direction flip below, so seed it false and let the sign decide.
+    { name: 'Cross-asset reversal',             shock: ca.shockLabel,                                           expectedMovePct: -0.03,                              survives: signal.direction === 'SHORT' },
     { name: 'Liquidity dry-up',                 shock: `spread ${mi?.data?.spreadBps ?? '—'} → ${((mi?.data?.spreadBps || 8) * 3).toFixed(0)} bps`, expectedMovePct: -Number(((((mi?.data?.spreadBps || 8) * 3) / 10000)).toFixed(4)), survives: (mi?.data?.spreadBps ?? 10) < 6 },
     { name: 'Headline reversal',                shock: 'a HIGH-severity headline flips wire bias',              expectedMovePct: -0.04,                              survives: false },
   ].map(t => ({ ...t, expectedMovePct: Number((t.expectedMovePct * dir).toFixed(4)) }))
@@ -1118,9 +1150,14 @@ function buildRisks(symbol, market, signal, skills) {
   if (nb?.data?.newsCounts?.highSeverity > 0) risks.push({ label: 'High-severity headline in wire', detail: `${nb.data.newsCounts.highSeverity} HIGH-severity item(s) in the current wire — tape can gap on the next print` })
   if (nb?.data?.newsDirection === 'MIXED' && (nb?.data?.newsCounts?.up || 0) + (nb?.data?.newsCounts?.down || 0) >= 4) risks.push({ label: 'Divided wire', detail: `${nb.data.newsCounts.up} bullish vs ${nb.data.newsCounts.down} bearish headlines — no clean bias; risk-of-whipsaw high` })
 
-  // Macro / cross-asset
-  if (mac?.data?.riskRegime === 'RISK-OFF' && signal.direction === 'LONG')  risks.push({ label: 'Macro against long', detail: 'Cross-asset regime is RISK-OFF (DXY up / VIX up / BTC down) — beta trades bleed against the tide' })
-  if (mac?.data?.riskRegime === 'RISK-ON'  && signal.direction === 'SHORT') risks.push({ label: 'Macro against short', detail: 'Cross-asset regime is RISK-ON — shorting into a bid tape is a size-down environment' })
+  // Macro / cross-asset. The macro skill emits `cryptoRegime` with values
+  // RISK_ON / RISK_OFF / NEUTRAL (underscore). The prior code checked
+  // `riskRegime === 'RISK-OFF'` (wrong key, wrong separator) so these risks
+  // never fired. Fixed to the real field + values, with class-correct copy.
+  const macRegime = mac?.data?.cryptoRegime
+  const ca = crossAssetRisk(market)
+  if (macRegime === 'RISK_OFF' && signal.direction === 'LONG')  risks.push({ label: 'Macro against long',  detail: `Cross-asset regime is RISK-OFF (${ca.regimeNote}) — beta longs bleed against the tide` })
+  if (macRegime === 'RISK_ON'  && signal.direction === 'SHORT') risks.push({ label: 'Macro against short', detail: 'Cross-asset regime is RISK-ON — shorting into a bid tape is a size-down environment' })
 
   // Structural venue risks (asset class)
   if (market.class === 'crypto')             risks.push({ label: 'BTC dominance',      detail: 'A BTC dump invalidates most alt setups within minutes — halve position on any 2%+ intra-hour BTC move' })
@@ -1213,9 +1250,10 @@ export function stressTestThesis({ thesis, memory, universe = DEMO_UNIVERSE, con
   const contradictWeight = contradicting.length * 0.06
   const confidenceAfter = Number(Math.max(0.15, confidenceBefore - contradictWeight).toFixed(2))
 
+  const ca = crossAssetRisk(market)
   const stressTests = [
     { name: 'Volatility shock (2× ATR)',            shock: `move ±${(market.atrPct * 2).toFixed(1)}%`,                    expectedPnlPct: -Number(((market.atrPct / 100) * 2).toFixed(3)),                                   survivable: (market.atrPct / 100) < 0.06 },
-    { name: 'Cross-asset reversal',                 shock: 'BTC 24h ≤ −4%',                                                expectedPnlPct: -0.03,                                                                              survivable: market.class !== 'crypto' },
+    { name: 'Cross-asset reversal',                 shock: ca.shockLabel,                                                  expectedPnlPct: -0.03,                                                                              survivable: direction === 'SHORT' },
     { name: 'Book pull (spread ×3)',                shock: `spread ${mi.data.spreadBps} → ${mi.data.spreadBps * 3} bps`,   expectedPnlPct: -Number(((mi.data.spreadBps * 3) / 10000).toFixed(4)),                              survivable: mi.data.spreadBps < 6 },
     { name: 'Catalyst re-cut',                      shock: 'headline reversal within 24h',                                 expectedPnlPct: -0.04,                                                                              survivable: false },
     { name: 'Sentiment blow-off',                   shock: `crowding → HIGH`,                                              expectedPnlPct: -0.025,                                                                             survivable: sen.data.crowding !== 'HIGH' },
@@ -1225,7 +1263,7 @@ export function stressTestThesis({ thesis, memory, universe = DEMO_UNIVERSE, con
     price: direction === 'LONG' ? Number((market.price * (1 - Math.max(0.015, market.atrPct / 100))).toFixed(2))
          : Number((market.price * (1 + Math.max(0.015, market.atrPct / 100))).toFixed(2)),
     conditions: [
-      market.class === 'crypto' ? 'BTC breaks 24h range' : 'BTC 24h ≤ −3%',
+      direction === 'LONG' ? ca.longKiller : ca.shortKiller,
       direction === 'LONG' ? 'Close < EMA20' : 'Close > EMA20',
       `Composite score < ${(signal.composite - 0.1).toFixed(2)}`,
     ],

@@ -42,6 +42,36 @@ test('paper: reserve throws on overdraft', () => {
   assert.throws(() => paper.reserveCapital(u.id, 999999))
 })
 
+test('paper: position release returns the SERVER-recorded reservation, not the client amount', () => {
+  const u = store.createUser({ email: 'p4@t.co' })
+  paper.reserveForPosition(u.id, 'pos-1', 1500)
+  // Client claims it reserved 9000 — must be ignored.
+  const r = paper.releaseAndCredit(u.id, 'pos-1', 9000, 60)
+  assert.equal(r.capitalReleased, 1500)
+  const snap = paper.paperSnapshot(u.id)
+  assert.equal(snap.freeCapital, 10060)
+  assert.equal(snap.allocatedCapital, 0)
+  assert.equal(snap.totalPnl, 60)
+  // +$60 on $10k is +0.6% — the old formula double-counted it as +1.2%.
+  assert.equal(snap.totalPnlPct, 0.006)
+})
+
+test('paper: realized pnl on a position is bounded by its notional', () => {
+  const u = store.createUser({ email: 'p5@t.co' })
+  paper.reserveForPosition(u.id, 'pos-2', 1000)
+  paper.releaseAndCredit(u.id, 'pos-2', 1000, -50000)
+  assert.equal(paper.paperSnapshot(u.id).totalPnl, -1000)
+})
+
+test('paper: reset clears reservations from the previous cycle', () => {
+  const u = store.createUser({ email: 'p6@t.co' })
+  paper.reserveForPosition(u.id, 'pos-3', 2000)
+  paper.resetPaperAccount(u.id)
+  const r = paper.releaseAndCredit(u.id, 'pos-3', 2000, 0)
+  assert.equal(r.capitalReleased, 0)
+  assert.equal(paper.paperSnapshot(u.id).freeCapital, 10000)
+})
+
 /* ---------- playbooks ---------- */
 
 test('playbooks: seed loaded with 4 canonicals', () => {

@@ -14,8 +14,18 @@ import { getPositioning, getSpotBookDepth, isSupported as isCrossSupported } fro
 import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
 import { computeIndicators, getTicker } from './providers/bitget.mjs'
 import { logger } from './lib/log.mjs'
+import { synthesizeSignal, buildResearchReport, roundPx } from '../src/domain.js'
 
-export async function liveEnhanceArtifact(artifact, prefs = null) {
+/**
+ * @param artifact  engine output ({ report })
+ * @param prefs     trader preferences (minNetEdge / minConfidence / persona)
+ * @param engineCtx { question, universe, macro, memory } — when supplied, the
+ *   signal and every derived report section are RECOMPUTED from the overlaid
+ *   live skills. Without it the signal would be computed on pre-overlay data
+ *   and the report would show live skill panels that disagree with its own
+ *   verdict (the pre-fix behaviour).
+ */
+export async function liveEnhanceArtifact(artifact, prefs = null, engineCtx = null) {
   if (!artifact?.report) return { artifact, live: {} }
   const symbol = artifact.report.symbol
   const [ticker, indicators, positioning, book, intel] = await Promise.all([
@@ -42,17 +52,22 @@ export async function liveEnhanceArtifact(artifact, prefs = null) {
       ema20: indicators.ema20,
       ema50: indicators.ema50,
       atrPct: indicators.atrPct,
-      support: indicators.support ?? Number((indicators.last * 0.985).toFixed(2)),
-      resistance: indicators.resistance ?? Number((indicators.last * 1.015).toFixed(2)),
+      support: indicators.support ?? roundPx((indicators.last * 0.985)),
+      resistance: indicators.resistance ?? roundPx((indicators.last * 1.015)),
       volumeZ: indicators.volumeZ ?? ta.data.volumeZ ?? null,
       live: true,
     }
     ta.confidence = 0.78                       // live data → higher confidence
   }
 
-  // ---- overlay sentiment-analyst with real funding + crowding + F&G
+  // ---- overlay sentiment-analyst
+  // Crypto: real funding + crowding + alternative.me Fear & Greed.
+  // Tokenized equities are skipped: alternative.me is a CRYPTO index, and
+  // applying it to NVDA/AAPL mislabelled crypto mood as equity sentiment.
   const sen = report.skills?.find(s => s.skill === 'sentiment-analyst')
-  if (sen) {
+  const isCrypto = report.skills && (engineCtx?.universe?.find(u => u.symbol === symbol)?.class
+    ?? (isCrossSupported(symbol) ? 'crypto' : 'tokenized-equity')) === 'crypto'
+  if (sen && isCrypto) {
     const fg = intel?.fearGreed
     const p  = positioning
     if (p || fg) {
@@ -66,6 +81,7 @@ export async function liveEnhanceArtifact(artifact, prefs = null) {
         tone,
         score: fg ? Number((fg.value / 100).toFixed(2)) : sen.data.score,
         crowding,
+        gauge: 'CRYPTO_FNG',
         fearGreed: fg?.value ?? sen.data.fearGreed,
         fearGreedTrend7d: fg?.trend7d ?? null,
         fundingRate: p?.meanFundingRate ?? sen.data.fundingRate,
@@ -77,6 +93,8 @@ export async function liveEnhanceArtifact(artifact, prefs = null) {
       sen.confidence = 0.82
     }
   }
+  // Equities: the engine's runSentiment already emits the VIX-derived gauge
+  // from ctx.macro — nothing to overlay here.
 
   // ---- overlay market-intel with real ETF flows + book depth + network
   const mi = report.skills?.find(s => s.skill === 'market-intel')
@@ -101,65 +119,68 @@ export async function liveEnhanceArtifact(artifact, prefs = null) {
       etfNetFlowMUsdTrailing20: flows?.trailing20UsdM ?? null,
       btcHashRate: net?.hashRate ?? null,
       btc24hTxCount: net?.n_tx_24h ?? null,
+      // Seeded flavour text — never ship it inside a LIVE report.
+      whaleActivity: null,
+      dexTvl: null,
+      etfFlows: null,
+      bookNote: undefined,
       live: true,
     }
     if (flows || b) mi.confidence = 0.85
   }
 
-  // ---- overlay signal net-edge friction with real spread
+  // ---- recompute the signal + every derived section from the live skills
   //
-  // We recompute netEdge here to reflect the ACTUAL Bitget spread rather
-  // than the engine's spread estimate. The prior implementation then
-  // unconditionally flipped SIGNAL → NO_TRADE any time netEdge went below
-  // zero, which silently ignored the trader's minNetEdge preference — an
-  // AGGRESSIVE user with a -200bp floor still saw every low-vol equity
-  // rewritten to SIT-OUT here after the local engine had correctly
-  // approved it. Re-apply the SAME configurable gate the engine uses so
-  // the two paths agree, defaulting to the historical "reject if netEdge
-  // < 0" only when no user preference is on record.
-  if (book?.spreadBps != null) {
-    // Bitget spot taker on both crypto pairs and tokenized R-pair equities
-    // is ~0.10% per side (20 bps round-trip). Real spread applied on top,
-    // floored at 2 bps for slippage guard.
-    const realFriction = Math.max(book.spreadBps / 10000, 0.0002) + 0.002
-    report.signal.estimatedFriction = Number(realFriction.toFixed(4))
-    report.signal.netEdge = Number((report.signal.expectedEdge - realFriction - report.signal.riskAdjustment).toFixed(4))
-
-    const minNetEdge = Number.isFinite(prefs?.minNetEdge) ? prefs.minNetEdge : 0
-    if (report.signal.netEdge < minNetEdge && report.signal.status === 'SIGNAL') {
-      report.signal.status = 'NO_TRADE'
-      report.signal.direction = 'FLAT'
-      report.signal.reason = `Post-friction net edge ${(report.signal.netEdge * 100).toFixed(2)}% fell below your ${(minNetEdge * 100).toFixed(2)}% floor after real ${book.spreadBps.toFixed(1)}bps spread was applied.`
-      report.suggestion = null
+  // The engine synthesized its signal BEFORE this overlay, so its verdict,
+  // thesis, evidence and invalidation were computed on pre-live skill data.
+  // Re-run synthesis on the overlaid skills (real spread now lives in
+  // market-intel.spreadBps, so friction is real too) and rebuild the report.
+  let rebuilt = report
+  const market = engineCtx?.universe?.find(u => u.symbol === symbol)
+  if (market && report.skills?.length === 5) {
+    try {
+      const mergedPrefs = { ...(engineCtx?.memory?.preferences || {}), ...(prefs || {}) }
+      const signal = synthesizeSignal(symbol, market, report.skills, mergedPrefs)
+      const fresh = buildResearchReport({
+        question: report.question ?? engineCtx?.question ?? '',
+        symbol, market, skills: report.skills, signal,
+        memory: { ...(engineCtx?.memory || {}), preferences: mergedPrefs },
+      })
+      rebuilt = { ...fresh, id: report.id, createdAt: report.createdAt, intent: report.intent }
+    } catch (err) {
+      logger.warn({ err: err.message, symbol }, 'live re-synthesis failed — keeping engine signal')
     }
   }
+  const out = rebuilt
 
   // ---- overlay live suggestion prices from real ticker
-  if (ticker?.last && report.suggestion) {
-    const move = ticker.last / report.suggestion.entry
-    report.suggestion.entry  = Number(ticker.last.toFixed(2))
-    report.suggestion.stop   = Number((report.suggestion.stop  * move).toFixed(2))
-    report.suggestion.target = Number((report.suggestion.target * move).toFixed(2))
+  if (ticker?.last && out.suggestion) {
+    const move = ticker.last / out.suggestion.entry
+    out.suggestion.entry  = roundPx(ticker.last)
+    out.suggestion.stop   = roundPx((out.suggestion.stop  * move))
+    out.suggestion.target = roundPx((out.suggestion.target * move))
   }
 
   // ---- stamp report as live (honestly — only when real data actually landed)
   const anyLive = Boolean(ticker || indicators || positioning || book || intel?.live)
   if (anyLive) {
-    report.dataMode = 'LIVE'
+    out.dataMode = 'LIVE'
     const parts = ['bitget-spot']
     if (live.positioning) parts.push('binance/okx/bitget-perp')
-    if (intel?.fearGreed) parts.push('alt.me FnG')
+    if (isCrypto && intel?.fearGreed) parts.push('alt.me FnG')
+    if (!isCrypto && engineCtx?.macro?.vix) parts.push('yahoo VIX')
     if (intel?.etfFlows) parts.push('farside ETF')
     if (intel?.networkStats) parts.push('blockchain.info')
-    report.dataFreshness = `Live · ${parts.join(' + ')}${ticker?.stale ? ' · STALE cache (upstream degraded)' : ''}`
+    out.dataFreshness = `Live · ${parts.join(' + ')}${ticker?.stale ? ' · STALE cache (upstream degraded)' : ''}`
   }
-  report.citations = [
-    ...(report.citations || []),
+  out.citations = [
+    ...(out.citations || []),
     ticker && { skill: 'live-data', source: 'bitget-public-rest' },
     live.positioning && { skill: 'cross-venue', source: 'binance/okx/bitget-perp' },
-    live.intel?.fearGreed && { skill: 'alt.me', source: 'crypto fear&greed index' },
+    isCrypto && live.intel?.fearGreed && { skill: 'alt.me', source: 'crypto fear&greed index' },
+    !isCrypto && engineCtx?.macro?.vix && { skill: 'yahoo-finance', source: 'VIX-derived equity fear gauge' },
     live.intel?.etfFlows && { skill: 'farside', source: `spot ${live.intel.etfFlows.asset} ETF net flows` },
   ].filter(Boolean)
 
-  return { artifact: { ...artifact, report }, live }
+  return { artifact: { ...artifact, report: out }, live }
 }

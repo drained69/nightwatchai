@@ -987,7 +987,10 @@ function RegimeSignalsGrid({ report }) {
   const flowTone    = (mi.volumeZ || 0) >= 1 ? 'up' : (mi.volumeZ || 0) <= -1 ? 'down' : 'neutral'
   const spreadTone  = (mi.spreadBps || 0) > 8 ? 'warn' : 'neutral'
   const senTone     = sen.tone === 'POSITIVE' ? 'up' : sen.tone === 'NEGATIVE' ? 'down' : 'neutral'
-  const macTone     = mac.riskRegime === 'RISK-ON' ? 'up' : mac.riskRegime === 'RISK-OFF' ? 'down' : 'neutral'
+  // The macro skill emits `cryptoRegime` (RISK_ON / RISK_OFF / NEUTRAL) — the
+  // chip previously read a non-existent `riskRegime` key and always showed "—".
+  const macRegime   = mac.cryptoRegime || mac.riskRegime || null
+  const macTone     = macRegime === 'RISK_ON' ? 'up' : macRegime === 'RISK_OFF' ? 'down' : 'neutral'
   const wireTone    = nb.newsDirection === 'UP' ? 'up' : nb.newsDirection === 'DOWN' ? 'down' : 'neutral'
 
   return (
@@ -1010,11 +1013,15 @@ function RegimeSignalsGrid({ report }) {
       </div>
       <div style={chipStyle(senTone)}>
         {label('Sentiment')}
-        {value(sen.tone ? `${sen.tone} · ${sen.crowding || '—'} crowd` : '—')}
+        {value(sen.tone
+          ? sen.gauge === 'VIX'
+            ? `${sen.tone} · VIX gauge ${sen.fearGreed ?? '—'}`
+            : `${sen.tone} · F&G ${sen.fearGreed ?? '—'} · ${sen.crowding || '—'} crowd`
+          : '—')}
       </div>
       <div style={chipStyle(macTone)}>
         {label('Cross-asset')}
-        {value(mac.riskRegime ? `${mac.riskRegime}${mac.dxy != null ? ` · DXY ${mac.dxy.toFixed(1)}` : ''}` : '—')}
+        {value(macRegime ? `${macRegime.replace('_', '-')}${mac.vix != null ? ` · VIX ${Number(mac.vix).toFixed(1)}` : ''}${mac.dxy != null ? ` · DXY ${Number(mac.dxy).toFixed(1)}` : ''}` : '—')}
       </div>
       <div style={chipStyle(wireTone)}>
         {label('Wire bias')}
@@ -1301,9 +1308,42 @@ function ResearchReportView({ report, decide, session, closeAtMark }) {
 
 /* ------------------------------------------------------- Markets page */
 
+// Same rules the server uses to label live universe rows (server/market-context.mjs).
+const classifyVolLive = (atrPct) => atrPct >= 4 ? 'HIGH' : atrPct >= 2 ? 'MED' : 'LOW'
+const classifyLiqLive = (spreadBps, vol) => {
+  const ok = spreadBps == null || spreadBps <= 10
+  return ok && (vol ?? 0) >= 50_000_000 ? 'HIGH' : ok && (vol ?? 0) >= 5_000_000 ? 'MED' : 'LOW'
+}
+
 function MarketsPage({ session, onAsk, toggleWatch }) {
   const [filter, setFilter] = useState('EQUITY')
-  const rows = session.markets.filter(m => filter === 'ALL' ? true : filter === 'CRYPTO' ? m.class === 'crypto' : m.class === 'tokenized-equity')
+  // The price stream only carries price/24h/spread/volume. 7d change and the
+  // volatility label were DEMO_UNIVERSE values — hydrate them from the real
+  // 1h-candle indicators the adapter already computes and caches.
+  const [ind, setInd] = useState({})
+  useEffect(() => {
+    if (!hasApi()) return
+    let alive = true
+    const pull = async () => {
+      const syms = session.markets.map(m => m.symbol)
+      const got = await Promise.all(syms.map(s =>
+        fetch(apiUrl(`/prices/indicators/${s}`), { signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.json() : null).catch(() => null)))
+      if (alive) setInd(Object.fromEntries(got.filter(Boolean).map(i => [i.symbol, i])))
+    }
+    pull(); const t = setInterval(pull, 5 * 60_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
+  const rows = session.markets
+    .filter(m => filter === 'ALL' ? true : filter === 'CRYPTO' ? m.class === 'crypto' : m.class === 'tokenized-equity')
+    .map(m => {
+      const i = ind[m.symbol]
+      return {
+        ...m,
+        change7d:   i?.change7d != null ? i.change7d * 100 : (m.live ? null : m.change7d),
+        volatility: i?.atrPct != null ? classifyVolLive(i.atrPct) : m.volatility,
+        liquidity:  m.live ? classifyLiqLive(m.spreadBps, m.volumeUsd24h) : m.liquidity,
+      }
+    })
   return (
     <div className="page">
       <PageHead title="Universe scanner" eyebrow={<><ScanLine size={12} /> TOKENIZED U.S. EQUITIES + CRYPTO CORRELATION SET · BITGET SPOT</>}>
@@ -1315,19 +1355,29 @@ function MarketsPage({ session, onAsk, toggleWatch }) {
       </PageHead>
       <div className="scanner">
         <div className="scan-head">
-          <span>Asset</span><span>Price</span><span>24h</span><span>7d</span><span>Cap</span><span>Vol</span><span>Liq</span><span>β</span><span>Event</span><span></span>
+          <span>Asset</span><span>Price</span><span>24h</span><span>7d</span><span>Cap</span><span>Vol</span><span>Liq</span><span>β</span><span>Latest wire</span><span></span>
         </div>
         {rows.map(m => (
           <div className="scan-row" key={m.symbol}>
             <div className="asset-cell"><div className={`asset-mark ${m.class === 'crypto' ? 'crypto' : 'equity'}`}>{m.symbol.slice(0,1)}</div><div><b>{m.symbol}</b><small>{m.sector}</small></div></div>
             <b className="mono">${fmtPrice(m.price)}</b>
             <span className={m.change24h >= 0 ? 'up' : 'down'}>{fmtPct(m.change24h / 100)}</span>
-            <span className={m.change7d  >= 0 ? 'up' : 'down'}>{fmtPct(m.change7d  / 100)}</span>
+            <span className={m.change7d == null ? 'muted' : m.change7d >= 0 ? 'up' : 'down'}>{m.change7d == null ? '—' : fmtPct(m.change7d / 100)}</span>
             <span className="mono muted">{fmtCap(m.marketCap)}</span>
             <span className={`level ${m.volatility.toLowerCase()}`}>{m.volatility}</span>
             <span className={`level ${m.liquidity.toLowerCase()}`}>{m.liquidity}</span>
             <span className="mono muted">{m.beta.toFixed(2)}</span>
-            <span className={m.event === 'None' ? 'event none' : 'event on'}>{m.event === 'None' ? '—' : m.event}</span>
+            {/* Latest REAL wire headline tagged to this symbol. The old column
+                showed DEMO_UNIVERSE flavour text ("Nuclear PPAs", "BTC beta")
+                beside live prices as if it were a current event. */}
+            {(() => {
+              const tagged = (session.news || []).filter(n => (n.affectedAssets || []).some(a => a.symbol === m.symbol))
+              // Prefer a real story over routine SEC Form 4 insider-filing stubs.
+              const hit = tagged.find(n => !/Form 4/i.test(n.headline)) || tagged[0]
+              return hit
+                ? <span className="event on" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }} title={`${hit.headline} — ${hit.source || ''}`}>{hit.headline}</span>
+                : <span className="event none">—</span>
+            })()}
             <div className="row-actions">
               <button className="chip mini" onClick={() => toggleWatch(m.symbol)}>{session.watchlist.includes(m.symbol) ? '★' : '☆'}</button>
               <button className="chip mini" onClick={() => onAsk(`Why is ${m.symbol} moving right now?`)}>RESEARCH →</button>
@@ -1527,9 +1577,9 @@ function PortfolioPage({ session, activeArtifact, closeAtMark, setCommand, submi
 
       {paper && (
         <div className="stat-strip">
-          <div><small>PAPER CAPITAL</small><b>${paperNav.toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">starting ${(paper.startingCapital ?? 10000).toLocaleString()}</em></div>
-          <div><small>FREE</small><b>${(paper.freeCapital ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">ready to allocate</em></div>
-          <div><small>ALLOCATED</small><b>${(paper.allocatedCapital ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">across {mine.followed.length} playbook{mine.followed.length === 1 ? '' : 's'}</em></div>
+          <div><small>PAPER CAPITAL</small><b>${paperNav.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><em className="muted">starting ${(paper.startingCapital ?? 10000).toLocaleString()}</em></div>
+          <div><small>FREE</small><b>${(paper.freeCapital ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><em className="muted">ready to allocate</em></div>
+          <div><small>ALLOCATED</small><b>${(paper.allocatedCapital ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</b><em className="muted">{open.length} position{open.length === 1 ? '' : 's'} · {mine.followed.length} playbook{mine.followed.length === 1 ? '' : 's'}</em></div>
           <div><small>REALIZED P&L</small><b className={(paper.totalPnl ?? 0) >= 0 ? 'up' : 'down'}>{fmtAbs(paper.totalPnl ?? 0)}</b></div>
           <div><small>OPEN PLAYBOOK P&L</small><b className={followedPnlUsd >= 0 ? 'up' : 'down'}>{fmtAbs(followedPnlUsd)}</b></div>
         </div>

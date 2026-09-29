@@ -171,10 +171,22 @@ export async function getSpotBookDepth(symbol) {
   // Defensive: if the upstream cache ever returns a mangled shape (e.g. a
   // stale-shelf fallback that spread arrays into indexed objects), refuse to
   // crash the /book/{sym} endpoint — just report no book.
-  const bids = Array.isArray(raw.bids) ? raw.bids : []
-  const asks = Array.isArray(raw.asks) ? raw.asks : []
-  const bestBid = bids[0]?.price
-  const bestAsk = asks[0]?.price
+  let bids = Array.isArray(raw.bids) ? raw.bids : []
+  let asks = Array.isArray(raw.asks) ? raw.asks : []
+  // The REST orderbook for R-pair tokenized equities can carry stale dust
+  // levels far from the matching engine's real BBO (observed: 0.5-share bids
+  // at 230.29 while the ticker BBO was 228.86/228.88 — a crossed book). The
+  // ticker (WS-fed) is the canonical top-of-book, so anchor to it: drop
+  // levels that cross it or sit >2% from mid, and report its bid/ask.
+  const t = await bitgetGetTicker(symbol).catch(() => null)
+  const tBid = Number(t?.bidPrice), tAsk = Number(t?.askPrice)
+  if (tBid > 0 && tAsk > 0 && tAsk >= tBid) {
+    const mid = (tBid + tAsk) / 2
+    bids = bids.filter(r => r.price <= tAsk && Math.abs(r.price - mid) / mid <= 0.02)
+    asks = asks.filter(r => r.price >= tBid && Math.abs(r.price - mid) / mid <= 0.02)
+  }
+  const bestBid = tBid > 0 && tAsk >= tBid ? tBid : bids[0]?.price
+  const bestAsk = tAsk > 0 && tAsk >= tBid ? tAsk : asks[0]?.price
   const spreadBps = bestBid && bestAsk ? ((bestAsk - bestBid) / bestAsk) * 10000 : null
   const bidLiquidityUsd = bids.reduce((s, r) => s + r.price * r.size, 0)
   const askLiquidityUsd = asks.reduce((s, r) => s + r.price * r.size, 0)

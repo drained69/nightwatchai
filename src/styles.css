@@ -243,7 +243,9 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 }
 .cb-icon { color: var(--accent); padding: 0 10px; border-right: 1px solid var(--line-soft) }
 .commandbar input {
-  flex: 1; border: 0; outline: 0; background: none; color: var(--text);
+  /* min-width: 0 lets the input shrink — without it the flex item kept its
+     intrinsic width and pushed RUN RESEARCH off-screen on phones. */
+  flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text);
   font: 500 13px 'IBM Plex Mono'; padding: 10px 0;
 }
 .commandbar input::placeholder { color: var(--dim); font-style: italic }
@@ -694,6 +696,19 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   .ticker-tape { display: none }
 }
 @media (max-width: 780px) {
+  .commandbar { gap: 6px }
+  .commandbar .cb-hint { display: none }
+  .commandbar .btn { flex-shrink: 0; padding-left: 12px; padding-right: 12px }
+  .disclaimer-footer { padding: 6px 12px }
+  .disclaimer-footer .df-rest { display: none }
+  .clock { display: none }
+  /* Fixed-column grids that forced horizontal page scroll on phones. */
+  .log-row { grid-template-columns: 56px 1fr; row-gap: 2px }
+  .log-row > :nth-child(3) { grid-column: 1 / -1 }
+  .log-row small { grid-column: 1 / -1; text-align: left }
+  .alert-row { grid-template-columns: 48px 1fr; padding: 10px 12px }
+  .alert-row > :nth-child(n+3) { grid-column: 1 / -1 }
+  .alert-row .row-actions { flex-wrap: wrap }
   .app-shell { margin: 6px; border-width: 4px; outline-offset: 2px }
   .app-shell::before, .app-shell::after { width: 20px; height: 20px; top: -11px }
   .app-shell::before { left: -11px } .app-shell::after { right: -11px }

@@ -86,6 +86,56 @@ test('synthesizeSignal produces valid direction and net-edge math', () => {
   assert.ok(sig.catalyst && typeof sig.catalyst === 'string')
 })
 
+/** A live skill pack where every skill reads perfectly neutral. */
+function neutralLivePack(overrides = {}) {
+  const base = {
+    'news-briefing':      { confidence: 0.7,  data: { live: true, newsDirection: 'MIXED', newsCounts: { up: 1, down: 1, mixed: 4 }, catalyst: 'x', keyPoints: [] } },
+    'market-intel':       { confidence: 0.85, data: { volumeZ: 0.1, depthImbalance: 0, spreadBps: 1 } },
+    'technical-analysis': { confidence: 0.78, data: { trend: 'SIDE', rsi: 50, ema20: 100, ema50: 100 } },
+    'sentiment-analyst':  { confidence: 0.8,  data: { score: 0.5, tone: 'NEUTRAL', crowding: 'LOW' } },
+    'macro-analyst':      { confidence: 0.75, data: { live: true, cryptoRegime: 'NEUTRAL', confirms: false } },
+  }
+  return Object.entries(base).map(([skill, s]) => ({ skill, ...s, ...(overrides[skill] || {}), data: { ...s.data, ...(overrides[skill]?.data || {}) } }))
+}
+
+test('synthesizeSignal: an all-neutral skill pack is FLAT for every risk profile (no directional bias)', () => {
+  // Regression: raw × confidence dragged neutral reads to ~0.35, so the desk
+  // published ~95% SHORT signals regardless of the tape.
+  const market = { ...DEMO_UNIVERSE.find(a => a.symbol === 'NVDA'), live: true, change24h: 0, indicators: { atrPct: 0.6 } }
+  for (const risk of ['CONSERVATIVE', 'MODERATE', 'AGGRESSIVE']) {
+    for (const style of ['EVENT_DRIVEN', 'TREND_FOLLOW', 'MEAN_REVERT', 'MACRO']) {
+      const sig = synthesizeSignal('NVDA', market, neutralLivePack(), { risk, style })
+      assert.equal(sig.composite, 0.5, `${risk}/${style} composite ${sig.composite}`)
+      assert.equal(sig.direction, 'FLAT', `${risk}/${style}`)
+    }
+  }
+})
+
+test('synthesizeSignal: mirrored bullish/bearish packs produce mirrored composites', () => {
+  const market = { ...DEMO_UNIVERSE.find(a => a.symbol === 'NVDA'), live: true, change24h: 0, indicators: { atrPct: 0.6 } }
+  const bull = synthesizeSignal('NVDA', market, neutralLivePack({
+    'technical-analysis': { data: { trend: 'UP' } }, 'macro-analyst': { data: { cryptoRegime: 'RISK_ON' } },
+    'sentiment-analyst': { data: { score: 0.7 } }, 'news-briefing': { data: { newsCounts: { up: 4, down: 0, mixed: 2 } } },
+  }), { risk: 'MODERATE' })
+  const bear = synthesizeSignal('NVDA', market, neutralLivePack({
+    'technical-analysis': { data: { trend: 'DOWN' } }, 'macro-analyst': { data: { cryptoRegime: 'RISK_OFF' } },
+    'sentiment-analyst': { data: { score: 0.3 } }, 'news-briefing': { data: { newsCounts: { up: 0, down: 4, mixed: 2 } } },
+  }), { risk: 'MODERATE' })
+  assert.equal(bull.direction, 'LONG')
+  assert.equal(bear.direction, 'SHORT')
+  assert.ok(Math.abs((bull.composite - 0.5) + (bear.composite - 0.5)) < 0.002, `${bull.composite} vs ${bear.composite}`)
+  assert.equal(bull.confidence, bear.confidence)
+})
+
+test('buildResearchReport files a down-trend as SUPPORTING evidence for a SHORT', () => {
+  const market = { ...DEMO_UNIVERSE.find(a => a.symbol === 'NVDA'), live: true, change24h: -1, indicators: { atrPct: 0.6 } }
+  const skills = neutralLivePack({ 'technical-analysis': { data: { trend: 'DOWN' } }, 'macro-analyst': { data: { cryptoRegime: 'RISK_OFF' } } })
+  const signal = { ...synthesizeSignal('NVDA', market, skills, { risk: 'AGGRESSIVE' }), direction: 'SHORT' }
+  const report = buildResearchReport({ question: 'q', symbol: 'NVDA', market, skills, signal, memory: initialSession().memory })
+  assert.ok(report.supporting.some(e => e.claim === 'Trend is down'), JSON.stringify(report.supporting))
+  assert.ok(!report.contradicting.some(e => e.claim === 'Trend is down'))
+})
+
 /* ---------- Research report ---------- */
 
 test('buildResearchReport shape covers all mandatory sections', () => {

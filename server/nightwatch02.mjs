@@ -171,7 +171,9 @@ async function buildCandidateCard(engine, row, ctx) {
     price: row.price ?? null,
     change24h: row.change24h ?? null,
     liveSource: row.live ? 'bitget-spot' : 'seed',
-    news: (ctx.newsBySymbol?.[row.symbol] || []).slice(0, 3).map(n => ({
+    news: (ctx.newsBySymbol?.[row.symbol] || [])
+      .filter((n, i, arr) => arr.findIndex(m => m.headline === n.headline) === i)
+      .slice(0, 3).map(n => ({
       headline: n.headline, source: n.source, url: n.url, publishedAt: n.publishedAt,
       direction: n.direction, magnitude: n.magnitude,
     })),
@@ -253,7 +255,9 @@ export async function generateBrief({ newsStore, engine = new LocalNightwatchEng
       live: liveRows.length,
       newsItems: newsStore?._items?.length || 0,
     },
-    marketSummary: summarizeMarket(universe, macro),
+    // getMacro() above can fail transiently (Yahoo); the shared context fetched
+    // it again moments later — fall back to that before rendering "—".
+    marketSummary: summarizeMarket(universe, macro || sharedCtx.macro || null),
     unusualMovements: findUnusualMovements(universe, bySymbol),
     alphaCandidates: candidates,
     disclaimer: 'Alpha of the Day is AI-generated research on tokenized U.S. stocks, not investment advice. Prices and news carry a source timestamp; missing data is labeled. Do your own diligence before trading.',

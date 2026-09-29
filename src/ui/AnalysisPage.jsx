@@ -47,7 +47,10 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
   const wantedRef = useRef(symbol)
   wantedRef.current = symbol
 
-  const load = async (sym) => {
+  // `fresh` forces a new AI synthesis (manual REFRESH only). Background polls
+  // reuse the server's cached synthesis so the verdict doesn't flap and the
+  // LLM isn't re-billed every 45s — only the fact panels update.
+  const load = async (sym, fresh = false) => {
     if (!hasApi()) { setError('Analysis workbench needs the adapter online.'); return }
     abortRef.current?.abort()
     const ctrl = new AbortController()
@@ -55,7 +58,7 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
     const timeout = setTimeout(() => ctrl.abort(), 35000)
     setLoading(true); setError(null)
     try {
-      const res = await fetch(apiUrl(`/analysis/${sym}`), { signal: ctrl.signal })
+      const res = await fetch(apiUrl(`/analysis/${sym}${fresh ? '?fresh=1' : ''}`), { signal: ctrl.signal })
       if (!res.ok) throw new Error(`analysis unavailable (${res.status})`)
       const body = await res.json()
       if (sym !== wantedRef.current) return   // user switched symbols mid-flight
@@ -105,7 +108,7 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
           <p className="lead">Real Bitget prices, book depth, indicators, cross-venue positioning and symbol-tagged news — synthesized into a complete desk analysis with a concrete verdict, entry, stop, target and invalidation level.</p>
         </div>
         <div className="row-actions">
-          <button className="btn ghost sm" onClick={() => load(symbol)} disabled={loading}>
+          <button className="btn ghost sm" onClick={() => load(symbol, true)} disabled={loading}>
             <RefreshCw size={12} className={loading ? 'spin' : ''} /> {loading ? 'ANALYZING…' : 'REFRESH'}
           </button>
         </div>
@@ -264,9 +267,10 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
           {mac ? (
             <div className="edge-grid">
               <div className="metric"><small>DXY</small><b>{mac.dxy?.last?.toFixed(2) ?? '—'}</b><em className={mac.dxy?.changePct >= 0 ? 'down' : 'up'}>{mac.dxy?.changePct != null ? `${mac.dxy.changePct >= 0 ? '+' : ''}${mac.dxy.changePct.toFixed(2)}%` : '—'}</em></div>
-              <div className="metric"><small>VIX</small><b>{mac.vix?.last?.toFixed(1) ?? '—'}</b><em className={(mac.vix?.last ?? 0) >= 20 ? 'down' : 'up'}>{mac.riskRegime?.replace('_', '-')}</em></div>
-              <div className="metric"><small>Regime · risk</small><b>{mac.riskRegime || '—'}</b></div>
-              {mac.cryptoRegime && <div className="metric"><small>Regime · crypto</small><b>{mac.cryptoRegime}</b></div>}
+              <div className="metric"><small>VIX</small><b>{mac.vix?.last?.toFixed(1) ?? '—'}</b><em className={(mac.vix?.last ?? 0) >= 20 ? 'down' : 'muted'}>{mac.vix?.last == null ? '—' : mac.vix.last >= 25 ? 'stressed' : mac.vix.last >= 20 ? 'elevated' : 'calm'}</em></div>
+              <div className="metric"><small>S&amp;P 500</small><b className={mac.spx?.changePct >= 0 ? 'up' : 'down'}>{mac.spx?.changePct != null ? `${mac.spx.changePct >= 0 ? '+' : ''}${mac.spx.changePct.toFixed(2)}%` : '—'}</b></div>
+              <div className="metric"><small>Nasdaq 100</small><b className={mac.ndx?.changePct >= 0 ? 'up' : 'down'}>{mac.ndx?.changePct != null ? `${mac.ndx.changePct >= 0 ? '+' : ''}${mac.ndx.changePct.toFixed(2)}%` : '—'}</b></div>
+              <div className="metric"><small>Risk regime</small><b className={mac.riskRegime === 'RISK_ON' ? 'up' : mac.riskRegime === 'RISK_OFF' ? 'down' : 'amber'}>{mac.riskRegime?.replace('_', '-') || '—'}</b></div>
             </div>
           ) : <div className="settings-body"><small className="muted">Macro tape unavailable.</small></div>}
         </section>

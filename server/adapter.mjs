@@ -88,6 +88,9 @@ const rateResearch = makeRateLimiter({ windowMs: 60_000, max: Number(process.env
 const rateAuth     = makeRateLimiter({ windowMs: 60_000, max: 20, prefix: 'auth' })
 const rateGeneral  = makeRateLimiter({ windowMs: 60_000, max: 240, prefix: 'general' })
 
+/** symbol → { at, synthesis } — see GET /analysis/{sym}. Bounded by the 18-asset universe. */
+const analysisSynthCache = new Map()
+
 const metrics = {
   requests: 0,
   research_ok: 0,
@@ -453,12 +456,17 @@ const server = http.createServer(async (req, res) => {
           session: clientCtx.session ? { watchlist: clientCtx.session.watchlist, positions: clientCtx.session.positions, universe: clientCtx.session.universe?.map(({ symbol, name, class: klass, sector, beta }) => ({ symbol, name, class: klass, sector, beta })) } : undefined,
         }
         const enriched = liveCtx
-          ? { ...request, context: { ...slimCtx, universe: liveCtx.universe, macro: liveCtx.macro, btcChange24h: liveCtx.btcChange24h, news: liveCtx.news, newsBySymbol: liveCtx.newsBySymbol } }
+          ? { ...request, context: { ...slimCtx, universe: liveCtx.universe, macro: liveCtx.macro, fearGreed: liveCtx.fearGreed, btcChange24h: liveCtx.btcChange24h, news: liveCtx.news, newsBySymbol: liveCtx.newsBySymbol } }
           : { ...request, context: slimCtx }
         const artifact = await engine.run(enriched)
         // Live overlay — real cross-venue positioning + market intel + book depth
         const { artifact: withLive, live } = request.intent === 'research'
-          ? await liveEnhanceArtifact(artifact, clientCtx.memory?.preferences)
+          ? await liveEnhanceArtifact(artifact, clientCtx.memory?.preferences, {
+              question: request.question,
+              universe: enriched.context?.universe,
+              macro: enriched.context?.macro,
+              memory: clientCtx.memory,
+            })
           : { artifact, live: {} }
         const { artifact: rewritten, engine: engineName } = await narrateReport(withLive, request.question || request.thesis)
         const bitget = probeBitget()
@@ -598,7 +606,13 @@ const server = http.createServer(async (req, res) => {
       // real numbers above. LLM is optional — the client still renders every
       // fact panel if the synthesis field is null.
       let synthesis = null
-      if (llm.enabled) {
+      // 5-min per-symbol synthesis cache: the workbench polls every 45s, and
+      // re-billing the LLM on each poll both costs ~8s and lets the verdict
+      // flap between refreshes. `?fresh=1` (manual REFRESH) bypasses it.
+      const cachedSyn = analysisSynthCache.get(symbol)
+      if (cachedSyn && Date.now() - cachedSyn.at < 5 * 60_000 && url.searchParams.get('fresh') !== '1') {
+        synthesis = cachedSyn.synthesis
+      } else if (llm.enabled) {
         try {
           metrics.llm_calls++
           const facts = {
@@ -610,13 +624,19 @@ const server = http.createServer(async (req, res) => {
             trend: indicators?.trend, support: indicators?.support, resistance: indicators?.resistance,
             atrPct: indicators?.atrPct, volumeZ: indicators?.volumeZ, change7d: indicators?.change7d,
             fundingRate: positioning?.meanFundingRate, openInterest: positioning?.openInterestUsd,
-            fearGreed: intel?.fearGreed?.value, fearGreedClass: intel?.fearGreed?.classification,
-            dxy: macro?.dxy?.last, vix: macro?.vix?.last, cryptoRegime: macro?.cryptoRegime, riskRegime: macro?.riskRegime,
+            // alternative.me F&G is a crypto index — only hand it to the model
+            // for crypto names so it can't narrate crypto mood as NVDA sentiment.
+            ...(EARNINGS_UNIVERSE.includes(symbol) ? {} : { cryptoFearGreed: intel?.fearGreed?.value, cryptoFearGreedClass: intel?.fearGreed?.classification }),
+            assetClass: EARNINGS_UNIVERSE.includes(symbol) ? 'tokenized U.S. equity' : 'crypto',
+            dxy: macro?.dxy?.last, vix: macro?.vix?.last, spxChangePct: macro?.spx?.changePct, ndxChangePct: macro?.ndx?.changePct, riskRegime: macro?.riskRegime,
             recentNews: newsItems.slice(0, 5).map(it => ({ headline: it.headline, source: it.source, severity: it.severity })),
           }
           const prompt = `You are NIGHTWATCH AI, a professional trading desk analyst. Given ONLY the JSON facts below about ${symbol}, produce a JSON response {"headline": string, "technical": string, "flow": string, "narrative": string, "verdict": "LONG"|"SHORT"|"SIT_OUT", "confidence": number 0..1, "entry": number|null, "stop": number|null, "target": number|null, "invalidation": string}. Keep each string one crisp sentence. Do not invent numbers not in the facts. Ground every claim in the facts.\n\nFACTS: ${JSON.stringify(facts)}`
           const out = await llm.jsonComplete(prompt)
-          if (out && typeof out === 'object') synthesis = out
+          if (out && typeof out === 'object') {
+            synthesis = out
+            analysisSynthCache.set(symbol, { at: Date.now(), synthesis })
+          }
         } catch (err) { logger.warn({ err: err.message, symbol }, 'analysis synthesis failed') }
       }
       return json(res, 200, {
@@ -626,8 +646,8 @@ const server = http.createServer(async (req, res) => {
         indicators,
         depth,
         positioning,
-        intel: intel ? { fearGreed: intel.fearGreed, etfFlows: intel.etfFlows } : null,
-        macro: macro ? { dxy: macro.dxy, vix: macro.vix, cryptoRegime: macro.cryptoRegime, riskRegime: macro.riskRegime, live: macro.live } : null,
+        intel: intel ? { fearGreed: EARNINGS_UNIVERSE.includes(symbol) ? null : intel.fearGreed, etfFlows: intel.etfFlows } : null,
+        macro: macro ? { dxy: macro.dxy, vix: macro.vix, spx: macro.spx, ndx: macro.ndx, riskRegime: macro.riskRegime, live: macro.live } : null,
         earnings,
         news: newsItems,
         synthesis,

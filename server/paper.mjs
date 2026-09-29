@@ -131,7 +131,9 @@ export function creditPnl(userId, amountUsd, sourceId) {
 export function resetPaperAccount(userId) {
   const user = getUser(userId)
   const pa = { startingCapital: STARTING, freeCapital: STARTING, allocatedCapital: 0, totalPnl: 0, createdAt: new Date().toISOString(), resetAt: new Date().toISOString() }
-  upsertUser({ ...user, paperAccount: pa, paperCredits: [] })
+  // Reservations belong to the previous cycle too — keeping them would let a
+  // pre-reset position "return" capital this fresh account never reserved.
+  upsertUser({ ...user, paperAccount: pa, paperCredits: [], paperReservations: [], paperReservationAmounts: {} })
   return pa
 }
 
@@ -152,7 +154,11 @@ export function reserveForPosition(userId, sourceId, amountUsd) {
   reservations.add(key)
   const kept = Array.from(reservations)
   const trimmed = kept.length > 1000 ? kept.slice(-1000) : kept
-  upsertUser({ ...getUser(userId), paperReservations: trimmed })
+  // Remember HOW MUCH was reserved so release returns exactly that, rather
+  // than whatever amount the client sends back on close.
+  const amounts = { ...(getUser(userId).paperReservationAmounts || {}), [key]: Number(amountUsd) }
+  for (const k of Object.keys(amounts)) if (!trimmed.includes(k)) delete amounts[k]
+  upsertUser({ ...getUser(userId), paperReservations: trimmed, paperReservationAmounts: amounts })
   logger.info({ userId, sourceId: key, amountUsd, newFree: next.freeCapital, newAllocated: next.allocatedCapital }, 'paper capital reserved')
   return { reserved: true, paper: paperSnapshot(userId) }
 }
@@ -177,9 +183,18 @@ export function releaseAndCredit(userId, sourceId, amountUsd, realizedPnl) {
   const credits = new Set(user.paperCredits || [])
   if (credits.has(key)) return { credited: false, reason: 'already-applied', paper: paperSnapshot(userId) }
 
-  const pnl = Number.isFinite(Number(realizedPnl)) ? Number(realizedPnl) : 0
-  const reserved = Number.isFinite(Number(amountUsd)) ? Number(amountUsd) : 0
   const hadReservation = (user.paperReservations || []).includes(key)
+  // Server-recorded reservation wins; the client amount is only a fallback for
+  // reservations made before amounts were recorded, and is capped at what is
+  // actually allocated.
+  const recorded = Number(user.paperReservationAmounts?.[key])
+  const clientAmt = Number.isFinite(Number(amountUsd)) ? Number(amountUsd) : 0
+  const reserved = Number.isFinite(recorded) && recorded > 0 ? recorded : Math.min(clientAmt, pa.allocatedCapital)
+  // A spot paper position cannot lose more than its notional; bound the gain
+  // too so a malformed client payload can't mint paper capital.
+  const rawPnl = Number.isFinite(Number(realizedPnl)) ? Number(realizedPnl) : 0
+  const bound = reserved > 0 ? reserved : Math.max(0, clientAmt)
+  const pnl = bound > 0 ? Math.max(-bound, Math.min(rawPnl, bound * 5)) : rawPnl
   // Return the reserved capital (if any) + fold P&L into totalPnl. When no
   // reservation was on record we still credit P&L for backwards compat.
   const capitalReturn = hadReservation ? reserved : 0
@@ -191,9 +206,11 @@ export function releaseAndCredit(userId, sourceId, amountUsd, realizedPnl) {
   }
   credits.add(key)
   const reservations = (user.paperReservations || []).filter(k => k !== key)
+  const amounts = { ...(user.paperReservationAmounts || {}) }
+  delete amounts[key]
   const kept = Array.from(credits)
   const trimmed = kept.length > 1000 ? kept.slice(-1000) : kept
-  upsertUser({ ...user, paperAccount: next, paperCredits: trimmed, paperReservations: reservations })
+  upsertUser({ ...user, paperAccount: next, paperCredits: trimmed, paperReservations: reservations, paperReservationAmounts: amounts })
   logger.info({ userId, sourceId: key, amountUsd: pnl, capitalReleased: capitalReturn, newFree: next.freeCapital, newAllocated: next.allocatedCapital, newPnl: next.totalPnl }, 'paper position released')
   return { credited: true, delta: pnl, capitalReleased: capitalReturn, paper: paperSnapshot(userId) }
 }
@@ -203,7 +220,9 @@ export function paperSnapshot(userId) {
   const pa = paperAccount(userId)
   if (!pa) return null
   const totalCapital = Number((pa.freeCapital + pa.allocatedCapital).toFixed(2))
-  const totalPnlPct = pa.startingCapital ? Number(((totalCapital + pa.totalPnl - pa.startingCapital) / pa.startingCapital).toFixed(4)) : 0
+  // totalCapital already includes realized P&L (it is credited into
+  // freeCapital on close) — adding totalPnl again double-counted every gain.
+  const totalPnlPct = pa.startingCapital ? Number(((totalCapital - pa.startingCapital) / pa.startingCapital).toFixed(4)) : 0
   return {
     ...pa,
     totalCapital,

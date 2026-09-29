@@ -17,6 +17,7 @@ import React, { useEffect, useState } from 'react'
 import { Clock, Mail, Sparkles, TrendingUp, TrendingDown, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react'
 import { hasApi, apiUrl } from './apiBase.js'
 import { getToken } from './GetAgentPages.jsx'
+import { safeUrl } from '../domain.js'
 
 const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA'])
 function isTokenizedStock(item) { return !CRYPTO_SYMBOLS.has(item.symbol) }
@@ -386,10 +387,11 @@ function CandidateCard({ candidate, onAsk }) {
         <div className="nw02-cand-block">
           <div className="nw02-cand-label">Relevant news</div>
           <ul className="nw02-cand-list">
-            {c.news.map(n => (
-              <li key={n.headline}>
+            {c.news.map((n, i) => (
+              // Distinct filings can share a headline — key by url + index.
+              <li key={`${n.url || n.headline}-${i}`}>
                 <span className="nw02-news-source">[{n.source}]</span> {n.headline}
-                {n.url && <a href={n.url} target="_blank" rel="noreferrer" className="nw02-news-link"><ExternalLink size={10} /></a>}
+                {n.url && <a href={safeUrl(n.url)} target="_blank" rel="noreferrer noopener" className="nw02-news-link"><ExternalLink size={10} /></a>}
               </li>
             ))}
           </ul>

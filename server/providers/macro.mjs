@@ -79,9 +79,18 @@ export async function getMacroSnapshot() {
   ])
   const any = dxy || spx || ndx || vix || ust10y
   if (!any) return null
-  const calmVix = vix ? vix.last < 20 : null
-  const equitiesUp = spx?.changePct != null ? spx.changePct > 0 : ndx?.changePct != null ? ndx.changePct > 0 : null
-  const riskRegime = calmVix === false ? 'RISK_OFF' : equitiesUp === true ? 'RISK_ON' : equitiesUp === false ? 'RISK_OFF' : 'NEUTRAL'
+  // Neutral band: a −0.3% S&P tick on a VIX-16 tape is noise, not risk-off.
+  // The prior rule flipped the whole desk bearish on any red print.
+  const vixLvl = vix?.last ?? null
+  const vixJump = vix?.changePct ?? null
+  const eqChg = spx?.changePct ?? ndx?.changePct ?? null
+  const riskRegime =
+      (vixLvl != null && vixLvl >= 25)                                  ? 'RISK_OFF'
+    : (vixJump != null && vixJump >= 10)                                ? 'RISK_OFF'
+    : (eqChg != null && eqChg <= -0.75)                                 ? 'RISK_OFF'
+    : (vixLvl != null && vixLvl >= 20 && eqChg != null && eqChg < 0)    ? 'RISK_OFF'
+    : (eqChg != null && eqChg >= 0.4 && (vixLvl == null || vixLvl < 20)) ? 'RISK_ON'
+    : 'NEUTRAL'
   return {
     dxy, spx, ndx, vix, ust10y,
     riskRegime,

@@ -73,8 +73,9 @@ export function MarketPulse({ compact = false }) {
       {equities.map(([sym, t]) => <span className="mp-chip" key={sym}><b>{sym}</b> {fmtPrice(t.last)} <em className={(t.changePct24h ?? 0) >= 0 ? 'up' : 'down'}>{fmtPct(t.changePct24h)}</em></span>)}
       {btc && <span className="mp-chip"><b>BTC</b> {fmtPrice(btc.last)} <em className={btc.changePct24h >= 0 ? 'up' : 'down'}>{fmtPct(btc.changePct24h)}</em></span>}
       {macro?.dxy && <span className="mp-chip"><b>DXY</b> {macro.dxy.last != null ? macro.dxy.last.toFixed(2) : '—'} <em className={macro.dxy.changePct >= 0 ? 'down' : 'up'}>{fmtPct(macro.dxy.changePct)}</em></span>}
-      {macro?.vix && <span className="mp-chip"><b>VIX</b> {macro.vix.last != null ? macro.vix.last.toFixed(1) : '—'} <em className={(macro.vix.last ?? 0) >= 20 ? 'down' : 'up'}>{macro.riskRegime?.replace('_', '-')}</em></span>}
-      {fg  && <span className="mp-chip"><b>F&G</b> {fg.value} <em className={fg.value >= 55 ? 'up' : fg.value <= 45 ? 'down' : 'amber'}>{fg.classification}</em></span>}
+      {macro?.vix && <span className="mp-chip"><b>VIX</b> {macro.vix.last != null ? macro.vix.last.toFixed(1) : '—'} <em className={(macro.vix.last ?? 0) >= 20 ? 'down' : 'muted'}>{(macro.vix.last ?? 0) >= 25 ? 'stressed' : (macro.vix.last ?? 0) >= 20 ? 'elevated' : 'calm'}</em></span>}
+      {macro?.riskRegime && <span className="mp-chip"><b>Regime</b> <em className={macro.riskRegime === 'RISK_ON' ? 'up' : macro.riskRegime === 'RISK_OFF' ? 'down' : 'amber'}>{macro.riskRegime.replace('_', '-')}</em></span>}
+      {fg  && <span className="mp-chip"><b>Crypto F&G</b> {fg.value} <em className={fg.value >= 55 ? 'up' : fg.value <= 45 ? 'down' : 'amber'}>{fg.classification}</em></span>}
       {etf?.latestDay && <span className="mp-chip"><b>BTC ETF flow</b> {fmtEtf(etf.latestDay.netUsdM)} <em className="muted">latest · 5d {fmtEtf(etf.trailing5UsdM)}</em></span>}
       {state.health && <span className="mp-chip subtle"><TrendingUp size={11} /> Adapter up {Math.round(state.health.uptimeSec / 60)}m · llm {state.health.provider?.llm || 'off'}</span>}
     </div>

@@ -14,6 +14,8 @@
 import { DEMO_UNIVERSE } from '../src/domain.js'
 import { getAllTickers, computeIndicators, mergeMarketRow } from './providers/bitget.mjs'
 import { getMacroSnapshot } from './providers/macro.mjs'
+import { loadHistory } from './history.mjs'
+import { getFearGreed } from './providers/marketintel.mjs'
 import { logger } from './lib/log.mjs'
 
 const UNIVERSE_CACHE_MS = Number(process.env.LIVE_UNIVERSE_CACHE_MS || 30_000)
@@ -48,7 +50,19 @@ export async function buildLiveUniverse() {
 
   const rows = await Promise.all(DEMO_UNIVERSE.map(async (base) => {
     const ticker = tickers[base.symbol] || null
-    const indicators = await computeIndicators(base.symbol).catch(() => null)
+    let indicators = await computeIndicators(base.symbol).catch(() => null)
+    // R-pair candle endpoints get rate-limited from shared cloud IPs. Without
+    // this fallback the row kept the SEEDED atrPct (e.g. COIN 5.4%) and the
+    // technical skill fell into its seeded branch (random RSI) — inside a
+    // report stamped LIVE. Use the disk history cache warmed at boot, the
+    // same fallback the /analysis workbench already applies.
+    if (!indicators) {
+      const h = loadHistory(base.symbol)
+      if (h?.candles?.length >= 50) {
+        indicators = await computeIndicators(base.symbol, h.candles.slice(-200)).catch(() => null)
+        if (indicators) { indicators.source = 'nightwatch-history-cache'; indicators.live = true }
+      }
+    }
     const row = mergeMarketRow(base, ticker, indicators)
     if (row.live) {
       row.volatility = classifyVolatility(row.atrPct)
@@ -143,12 +157,15 @@ export function liveUniverseStatus() {
  * Falls back to seeded rows (live:false) when Bitget is unreachable.
  */
 export async function buildLiveContext(newsStore, asset) {
-  const [universe, macro] = await Promise.all([buildLiveUniverse(), getMacro()])
+  // Crypto Fear & Greed rides along so every engine path (research, Thesis
+  // Lab, scan, Alpha of the Day) reads real crypto sentiment, not seeded.
+  const [universe, macro, fearGreed] = await Promise.all([buildLiveUniverse(), getMacro(), getFearGreed().catch(() => null)])
   const btcRow = universe.find(u => u.symbol === 'BTC')
   const bySymbol = newsBySymbol(newsStore)
   return {
     universe,
     macro: macro || null,
+    fearGreed: fearGreed || null,
     btcChange24h: btcRow?.change24h ?? null,
     news: asset ? (bySymbol[asset] || []) : [],
     newsBySymbol: bySymbol,

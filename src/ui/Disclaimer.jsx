@@ -13,7 +13,10 @@ export function Disclaimer() {
       <div className="disclaimer-footer">
         <ShieldCheck size={11} />
         <span>
-          <b>NIGHTWATCH AI is a research tool — not a broker, exchange or investment advisor.</b> Analysis is informational only and does not constitute a solicitation, recommendation, or offer to buy or sell any asset. Market data is provided by Bitget and third-party sources and may be delayed, incomplete or incorrect. Paper trading by default; live order routing is disabled unless explicitly enabled by the account holder. Past performance does not guarantee future results. <em>Not investment, legal or tax advice.</em>
+          <b>NIGHTWATCH AI is a research tool — not a broker, exchange or investment advisor.</b>{' '}
+          {/* Hidden on phones (the full text is in the first-launch modal every
+              user acknowledges) — as a sticky bar it covered ~20% of the screen. */}
+          <span className="df-rest">Analysis is informational only and does not constitute a solicitation, recommendation, or offer to buy or sell any asset. Market data is provided by Bitget and third-party sources and may be delayed, incomplete or incorrect. Paper trading by default; live order routing is disabled unless explicitly enabled by the account holder. Past performance does not guarantee future results. </span><em>Not investment, legal or tax advice.</em>
         </span>
       </div>
       {!ack && (

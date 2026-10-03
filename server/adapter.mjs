@@ -35,7 +35,7 @@ import { makeSseBus } from './lib/sse.mjs'
 import { makeLlm } from './lib/llm.mjs'
 import { requireAuth, devLogin, signup, login, publicUser, requestSignInCode, verifySignInCode } from './lib/auth.mjs'
 import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './lib/store.mjs'
-import { getAllTickers, getAllTickersLive, getTicker, computeIndicators } from './providers/bitget.mjs'
+import { getAllTickers, getAllTickersLive, getTicker, computeIndicators, listingStatus } from './providers/bitget.mjs'
 import { startBitgetWs, stopBitgetWs, getWsStatus } from './providers/bitget-ws.mjs'
 import { startBitgetMcp, stopBitgetMcp, callMcpTool, listMcpTools, mcpStatus } from './providers/bitget-mcp.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
@@ -88,7 +88,7 @@ const rateResearch = makeRateLimiter({ windowMs: 60_000, max: Number(process.env
 const rateAuth     = makeRateLimiter({ windowMs: 60_000, max: 20, prefix: 'auth' })
 const rateGeneral  = makeRateLimiter({ windowMs: 60_000, max: 240, prefix: 'general' })
 
-/** symbol → { at, synthesis } — see GET /analysis/{sym}. Bounded by the 18-asset universe. */
+/** symbol → { at, synthesis } — see GET /analysis/{sym}. Bounded by the asset universe. */
 const analysisSynthCache = new Map()
 
 const metrics = {
@@ -104,7 +104,7 @@ const metrics = {
 
 if (NEWS_ENABLED) news.start()
 
-// Bitget public WS — live tick + top-of-book updates for the 18-asset universe.
+// Bitget public WS — live tick + top-of-book updates for the whole asset universe.
 // Replaces the 10s REST poll whenever the socket has fresh data; REST is the
 // cold-boot and reconnect fallback.
 if (process.env.BITGET_WS_ENABLED !== '0') startBitgetWs()
@@ -338,7 +338,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         provider: { llm: llm.provider, model: llm.model, bitgetMcp: probeBitget(), bitgetWs: getWsStatus() },
         news: { enabled: NEWS_ENABLED, seen: news._items.length, feeds: FEEDS.length },
-        universe: { total: DEMO_UNIVERSE.length, ...liveUniverseStatus() },
+        universe: { ...liveUniverseStatus(), total: DEMO_UNIVERSE.length, listing: listingStatus() },
         mailer: mailerStatus(),
         nightwatch02: { ...nw02.status(), subscribers: listActiveSubscribers().length },
         uptimeSec: Math.round((Date.now() - metrics.started) / 1000),

@@ -47,7 +47,7 @@ Distribution target: 50 overnight discretionary traders in month one; retention 
 
 Everything below is running in production today at nightwatchai.watch, not scaffolded:
 
-- **18-asset universe with real live prices.** 8 crypto majors + 10 tokenized U.S. mega-caps via Bitget's R-prefixed pairs (`RNVDAUSDT` etc.). Sourced from both Bitget's public REST (ticker, candles, orderbook) and a live public **WebSocket** tick stream — sub-second cadence, auto-reconnect with heartbeat.
+- **81-asset universe with real live prices.** 8 crypto majors + 73 tokenized U.S. stocks and index ETFs via Bitget's R-prefixed pairs (`RNVDAUSDT`, `RPLTRUSDT`, `RSPYUSDT` etc.). Sourced from both Bitget's public REST (ticker, candles, orderbook) and a live public **WebSocket** tick stream — sub-second cadence, auto-reconnect with heartbeat.
 - **5 research skills** matching the official Bitget `bitget-signal` skill vocabulary: `news-briefing`, `market-intel`, `technical-analysis`, `sentiment-analyst`, `macro-analyst`.
 - **Bitget Signal MCP — real, live, connected.** A Streamable-HTTP MCP client against Bitget's hosted signal MCP (the same endpoint `@bitget-ai/bitget-signal` registers into Claude Code / Cursor / Windsurf). 19 tools reachable and callable both server-side and directly by the trader via a "Run MCP" button on each research skill chip.
 - **Direction-aware signal synthesis:** direction, confidence, expected edge (derived from real ATR), friction (real Bitget spot spread), risk adjustment, net edge, status, catalyst, composite score. Trader-configurable gates (minimum confidence, minimum net edge) with three one-click presets — Aggressive, Balanced, Conservative.

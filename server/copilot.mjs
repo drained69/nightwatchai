@@ -58,6 +58,17 @@ const FACTOR_LABELS = {
   MSTR: ['crypto-equity', 'btc-beta'],
 }
 
+/** Fallback factor tags for names without a hand-written entry above. */
+function factorsFromMeta(meta) {
+  if (!meta) return []
+  const sector = meta.sector.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  if (meta.class === 'crypto') return ['crypto', sector]
+  const out = [sector]
+  if (/crypto|btc|eth|stablecoin/i.test(meta.sector)) out.push('crypto-equity', 'btc-beta')
+  if (meta.marketCap >= 500e9) out.push('mega-cap')
+  return out
+}
+
 /** Return the correlation of `symbol` returns to BTC returns using cached history. */
 export function correlationToBtc(symbol) {
   if (symbol === 'BTC') return 1.0
@@ -93,7 +104,7 @@ export function analyzePortfolio(positions, { nav = 25000 } = {}) {
       class: meta?.class || 'unknown',
       beta: meta?.beta ?? null,
       corrToBtc: correlationToBtc(p.asset),
-      factors: FACTOR_LABELS[p.asset] || [],
+      factors: FACTOR_LABELS[p.asset] || factorsFromMeta(meta),
     }
   })
 

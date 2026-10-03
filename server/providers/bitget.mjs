@@ -4,11 +4,15 @@
  * Uses Bitget's public REST endpoints — no auth required.
  * Docs: https://www.bitget.com/api-doc/spot/market/Get-Tickers
  *
- * Covers the full 18-asset universe:
+ * Covers the full universe (src/domain.js DEMO_UNIVERSE):
  *   - 8 crypto majors trade as plain spot pairs (BTCUSDT, ETHUSDT, …)
- *   - 10 tokenized U.S. equities trade on Bitget spot as xStocks-style
- *     R-prefixed pairs (RNVDAUSDT, RTSLAUSDT, …) — real prices, real books,
- *     real candles, 7×24.
+ *   - 70+ tokenized U.S. equities and index ETFs trade on Bitget spot as
+ *     R-prefixed pairs (RNVDAUSDT, RPLTRUSDT, RSPYUSDT, …) — real prices,
+ *     real books, real candles.
+ *
+ * Once the bulk ticker call has seen Bitget's full spot list, pairs Bitget
+ * does not list are skipped (isListed) instead of burning rate limit on
+ * per-symbol candle/book/ticker requests that can only fail.
  *
  * Resilience:
  *   - one automatic retry per call
@@ -16,6 +20,8 @@
  *     good value, we return it marked `stale: true` with its original `ts`
  *     instead of collapsing to null. Callers still surface freshness honestly.
  */
+
+import { CRYPTO_SYMBOL_LIST, EQUITY_SYMBOLS } from '../../src/domain.js'
 
 export const BITGET_BASE = process.env.BITGET_BASE_URL || 'https://api.bitget.com'
 const BITGET_CACHE_MS = Number(process.env.BITGET_CACHE_MS || 5000)
@@ -29,25 +35,9 @@ const BITGET_RELAY_KEY = process.env.BITGET_RELAY_KEY || ''
 /** Universe ticker → Bitget spot symbol. Equities use Bitget's R-prefixed tokenized-stock pairs. */
 export const SYMBOL_MAP = new Map([
   // Crypto majors
-  ['BTC',   'BTCUSDT'],
-  ['ETH',   'ETHUSDT'],
-  ['SOL',   'SOLUSDT'],
-  ['BNB',   'BNBUSDT'],
-  ['XRP',   'XRPUSDT'],
-  ['DOGE',  'DOGEUSDT'],
-  ['AVAX',  'AVAXUSDT'],
-  ['ADA',   'ADAUSDT'],
-  // Tokenized U.S. equities (Bitget spot, R-prefix)
-  ['NVDA',  'RNVDAUSDT'],
-  ['TSLA',  'RTSLAUSDT'],
-  ['AAPL',  'RAAPLUSDT'],
-  ['MSFT',  'RMSFTUSDT'],
-  ['AMZN',  'RAMZNUSDT'],
-  ['GOOGL', 'RGOOGLUSDT'],
-  ['META',  'RMETAUSDT'],
-  ['AMD',   'RAMDUSDT'],
-  ['COIN',  'RCOINUSDT'],
-  ['MSTR',  'RMSTRUSDT'],
+  ...CRYPTO_SYMBOL_LIST.map(sym => [sym, `${sym}USDT`]),
+  // Tokenized U.S. equities + index ETFs (Bitget spot, R-prefix)
+  ...EQUITY_SYMBOLS.map(sym => [sym, `R${sym}USDT`]),
 ])
 
 /** Back-compat alias. */
@@ -55,6 +45,23 @@ export const CRYPTO_MAP = SYMBOL_MAP
 
 export function pairFor(symbol) { return SYMBOL_MAP.get(String(symbol || '').toUpperCase()) || null }
 export function isSupported(symbol) { return SYMBOL_MAP.has(String(symbol || '').toUpperCase()) }
+
+/** Every spot pair Bitget returned on the last successful bulk-ticker call (null until seen). */
+let listedPairs = null
+/**
+ * False only when Bitget's full spot list has been seen and the pair is not
+ * on it. Unknown (cold boot) counts as listed so nothing is skipped early.
+ */
+export function isListed(symbol) {
+  const pair = pairFor(symbol)
+  if (!pair) return false
+  return !listedPairs || listedPairs.has(pair)
+}
+/** Mapped pairs → split by whether Bitget currently lists them (diagnostics). */
+export function listingStatus() {
+  const missing = [...SYMBOL_MAP].filter(([sym]) => !isListed(sym)).map(([sym]) => sym)
+  return { known: Boolean(listedPairs), mapped: SYMBOL_MAP.size, listed: SYMBOL_MAP.size - missing.length, missing }
+}
 
 /** key → { at, value } fresh cache; key → { at, value } stale shelf. */
 const cache = new Map()
@@ -121,7 +128,7 @@ async function fetchJson(url, { retries = 3 } = {}) {
 /** Return { last, open24h, high24h, low24h, volumeUsd24h, changePct24h, spreadBps } or null. */
 export async function getTicker(symbol) {
   const pair = pairFor(symbol)
-  if (!pair) return null
+  if (!pair || !isListed(symbol)) return null
   const key = `ticker:${pair}`
   const hit = getCached(key)
   if (hit) return hit
@@ -189,6 +196,8 @@ export async function getAllTickers() {
   const body = await fetchJson(`${BITGET_BASE}/api/v2/spot/market/tickers`)
   if (!body?.data) return getStale(key)
   const byPair = new Map(body.data.map(row => [row.symbol, row]))
+  // A truncated or error-shaped response must not mark the universe unlisted.
+  if (byPair.size >= 100) listedPairs = new Set(byPair.keys())
   const out = {}
   for (const [symbol, pair] of SYMBOL_MAP) {
     const row = byPair.get(pair)
@@ -220,7 +229,7 @@ export async function getAllTickers() {
  */
 export async function getCandles(symbol, granularity = '1h', limit = 200, endTime = null) {
   const pair = pairFor(symbol)
-  if (!pair) return null
+  if (!pair || !isListed(symbol)) return null
   const g = String(granularity).toLowerCase()
   const key = `candles:${pair}:${g}:${limit}:${endTime || 'latest'}`
   const hit = getCached(key)
@@ -245,7 +254,7 @@ export async function getCandles(symbol, granularity = '1h', limit = 200, endTim
 /** Return best bid/ask depth for the symbol (top of book). */
 export async function getBook(symbol, depth = 5) {
   const pair = pairFor(symbol)
-  if (!pair) return null
+  if (!pair || !isListed(symbol)) return null
   const key = `book:${pair}:${depth}`
   const hit = getCached(key)
   if (hit) return hit
@@ -271,8 +280,30 @@ export async function getBook(symbol, depth = 5) {
  *  Callers may pass pre-loaded candles (e.g. from the disk history cache) to
  *  bypass the live Bitget fetch — useful when the R-pair endpoints are being
  *  rate-limited from a shared cloud IP. */
+const INDICATOR_CACHE_MS = Number(process.env.BITGET_INDICATOR_CACHE_MS || 60_000)
+/** symbol → { at, value } for live-fetched indicators; symbol → Promise while in flight. */
+const indicatorCache = new Map()
+const indicatorInflight = new Map()
+
 export async function computeIndicators(symbol, providedCandles = null) {
-  const candles = providedCandles || await getCandles(symbol, '1h', 200)
+  if (providedCandles) return indicatorsFrom(symbol, providedCandles)
+  // Built off 1h bars, so a minute-old read is current. With 70+ symbols the
+  // universe rebuild, Markets page and alert loops would otherwise each pull
+  // fresh candles for every name and trip Bitget's per-IP limit.
+  const key = String(symbol || '').toUpperCase()
+  const hit = indicatorCache.get(key)
+  if (hit && Date.now() - hit.at < INDICATOR_CACHE_MS) return hit.value
+  if (indicatorInflight.has(key)) return indicatorInflight.get(key)
+  const p = (async () => {
+    const value = indicatorsFrom(symbol, await getCandles(symbol, '1h', 200))
+    if (value) indicatorCache.set(key, { at: Date.now(), value })
+    return value
+  })().finally(() => indicatorInflight.delete(key))
+  indicatorInflight.set(key, p)
+  return p
+}
+
+function indicatorsFrom(symbol, candles) {
   if (!candles || candles.length < 50) return null
   const closes = candles.map(c => c.close)
   const highs  = candles.map(c => c.high)

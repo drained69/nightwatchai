@@ -28,7 +28,7 @@ docker compose up --build
 Then open `http://localhost:8787`. You get:
 
 - The SPA and the API on one origin (no CORS gymnastics).
-- Real Bitget public prices for all 18 assets (crypto + tokenized equities) refreshed every 10s.
+- Real Bitget public prices for all 81 assets (crypto + tokenized equities) refreshed every 10s.
 - Real news from CoinDesk, TheBlock, CoinTelegraph, SEC 8-K, Yahoo Finance, CNBC (`NEWS_ENABLED=1`).
 - Real macro tape (DXY, S&P 500, Nasdaq, VIX, UST10Y) via Yahoo Finance.
 - Heuristic news classifier (LLM classifier kicks in as soon as you set an LLM key).

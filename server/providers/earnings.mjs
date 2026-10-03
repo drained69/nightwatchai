@@ -15,13 +15,15 @@
  * both "next date" and "consensus EPS estimate" together.
  */
 import { logger } from '../lib/log.mjs'
+import { EQUITY_SYMBOLS } from '../../src/domain.js'
 
 const CACHE_MS  = Number(process.env.EARNINGS_CACHE_MS   || 12 * 60 * 60 * 1000)  // 12h
 const TIMEOUT   = Number(process.env.EARNINGS_TIMEOUT_MS || 5000)
 const HORIZON_DAYS = Number(process.env.EARNINGS_HORIZON_DAYS || 90)
 
-// US-equity coverage universe (matches the 10 tokenized R-pairs on Bitget).
-export const EQUITY_UNIVERSE = ['NVDA','TSLA','AAPL','MSFT','AMZN','GOOGL','META','AMD','COIN','MSTR']
+// US-equity coverage universe — every tokenized R-pair in the shared universe
+// (index ETFs included; they simply never report earnings).
+export const EQUITY_UNIVERSE = EQUITY_SYMBOLS
 
 // Nasdaq's API refuses server-side clients without matching Origin/Referer headers.
 // The exact User-Agent doesn't matter; the origin does.
@@ -165,7 +167,11 @@ export async function getEarningsFor(symbol) {
 export async function getUpcomingEarnings({ symbols = EQUITY_UNIVERSE, limit = 5 } = {}) {
   const cached = getCached(`upcoming:${symbols.join(',')}:${limit}`)
   if (cached) return cached
-  const list = await Promise.all(symbols.map(s => getEarningsFor(s).catch(() => null)))
+  // Small batches — 70+ names in one burst gets the server throttled by Nasdaq.
+  const list = []
+  for (let i = 0; i < symbols.length; i += 8) {
+    list.push(...await Promise.all(symbols.slice(i, i + 8).map(s => getEarningsFor(s).catch(() => null))))
+  }
   const rows = list
     .filter(x => x && x.nextEarningsAt && x.nextEarningsAt > Date.now() - 86_400_000)   // include today
     .sort((a, b) => a.nextEarningsAt - b.nextEarningsAt)

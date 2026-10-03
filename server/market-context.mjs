@@ -1,7 +1,7 @@
 /**
  * Live market context for the research engine.
  *
- * Builds a real-data version of the 18-asset universe (Bitget spot tickers +
+ * Builds a real-data version of the asset universe (Bitget spot tickers +
  * 1h-candle indicators for crypto majors *and* Bitget's R-prefixed tokenized
  * equities), attaches the latest real news items per asset from the news
  * store, and a real macro snapshot (DXY / SPX / NDX / VIX / UST10Y).
@@ -21,6 +21,23 @@ import { logger } from './lib/log.mjs'
 const UNIVERSE_CACHE_MS = Number(process.env.LIVE_UNIVERSE_CACHE_MS || 30_000)
 
 let universeCache = { at: 0, rows: null }
+// Candle fetches per rebuild are bounded so 80+ symbols don't burst past
+// Bitget's per-IP market-data limit in a single tick.
+const UNIVERSE_CONCURRENCY = Number(process.env.LIVE_UNIVERSE_CONCURRENCY || 6)
+
+/** Promise.all over `items` with at most `limit` in flight; preserves order. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+  return out
+}
 let macroCache = { at: 0, snap: null }
 
 /** Derive honest HIGH/MED/LOW labels from real numbers. */
@@ -48,7 +65,7 @@ export async function buildLiveUniverse() {
   const tickers = await getAllTickers().catch(() => null)
   if (!tickers) return universeCache.rows || DEMO_UNIVERSE   // last good, else seeded fallback
 
-  const rows = await Promise.all(DEMO_UNIVERSE.map(async (base) => {
+  const rows = await mapLimit(DEMO_UNIVERSE, UNIVERSE_CONCURRENCY, async (base) => {
     const ticker = tickers[base.symbol] || null
     let indicators = await computeIndicators(base.symbol).catch(() => null)
     // R-pair candle endpoints get rate-limited from shared cloud IPs. Without
@@ -72,7 +89,7 @@ export async function buildLiveUniverse() {
       if (ticker?.volumeUsd24h != null) row.volumeUsd24h = ticker.volumeUsd24h
     }
     return row
-  }))
+  })
 
   const liveCount = rows.filter(r => r.live).length
   universeCache = { at: Date.now(), rows }

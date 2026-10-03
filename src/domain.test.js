@@ -10,12 +10,39 @@ import {
 
 /* ---------- Universe + formatters ---------- */
 
-test('universe has 18 assets across crypto and tokenized-equity classes', () => {
-  assert.equal(DEMO_UNIVERSE.length, 18)
+test('universe has 8 crypto majors and 70+ tokenized equities, no duplicates', () => {
   const crypto = DEMO_UNIVERSE.filter(a => a.class === 'crypto').length
   const equity = DEMO_UNIVERSE.filter(a => a.class === 'tokenized-equity').length
-  assert.equal(crypto + equity, 18)
-  assert.ok(crypto >= 5 && equity >= 5)
+  assert.equal(crypto, 8)
+  assert.ok(equity >= 70, `expected 70+ equities, got ${equity}`)
+  assert.equal(crypto + equity, DEMO_UNIVERSE.length)
+  assert.equal(new Set(DEMO_UNIVERSE.map(a => a.symbol)).size, DEMO_UNIVERSE.length)
+  for (const a of DEMO_UNIVERSE) {
+    assert.ok(a.price > 0 && a.beta > 0 && a.atrPct > 0 && a.marketCap > 0, `${a.symbol} seed row incomplete`)
+    assert.ok(/^[A-Z]{1,5}$/.test(a.symbol), `${a.symbol} ticker shape`)
+  }
+})
+
+test('inferAsset resolves extended equities without word-ticker false positives', () => {
+  assert.equal(inferAsset('Is Palantir overvalued?'), 'PLTR')
+  assert.equal(inferAsset('research HOOD into earnings'), 'HOOD')
+  assert.equal(inferAsset('$cost earnings preview'), 'COST')
+  assert.equal(inferAsset('coca-cola dividend'), 'KO')
+  assert.equal(inferAsset('what does it cost to hold this'), null)
+  assert.equal(inferAsset('any intel on the market tonight?'), null)
+  assert.equal(inferAsset('market intelligence report'), null)
+  assert.equal(inferAsset('buy the dip, spy on the tape'), null)
+  assert.equal(classifyIntent('find the strongest setups overnight').intent, 'find-opportunities')
+  assert.equal(classifyIntent('top setups in PLTR').intent, 'research')
+})
+
+test('coerceSession adds newly covered symbols to a saved markets list', () => {
+  const seed = initialSession()
+  const saved = { ...seed, markets: seed.markets.slice(0, 18).map(m => ({ ...m, price: 1 })) }
+  const s = coerceSession(JSON.parse(JSON.stringify(saved)))
+  assert.equal(s.markets.length, DEMO_UNIVERSE.length)
+  assert.equal(s.markets.find(m => m.symbol === 'NVDA').price, 1)       // saved row kept
+  assert.ok(s.markets.some(m => m.symbol === 'PLTR'))                     // new row added
 })
 
 test('formatters render prices and percents predictably', () => {
@@ -383,7 +410,7 @@ test('coerceSession returns fresh initial session when given empty input', () =>
   const s = coerceSession(null)
   assert.equal(s.version, 3)
   assert.equal(s.settings.paperOnly, true)
-  assert.equal(s.universe.length, 18)
+  assert.equal(s.universe.length, DEMO_UNIVERSE.length)
 })
 
 test('migrateFromLegacy carries over NAV and preserves paperOnly', () => {

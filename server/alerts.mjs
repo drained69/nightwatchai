@@ -22,6 +22,7 @@ import { getAllTickers, computeIndicators } from './providers/bitget.mjs'
 import { getPositioning } from './providers/crossvenue.mjs'
 import { paths, listUsers, loadCollection, saveCollection } from './lib/store.mjs'
 import { logger } from './lib/log.mjs'
+import { DEMO_UNIVERSE, findTickers } from '../src/domain.js'
 
 const EVAL_MS = Number(process.env.ALERTS_EVAL_MS || 15_000)
 
@@ -31,9 +32,10 @@ const OPS    = new Set(['<', '>', '<=', '>=', '==', '!='])
 /** Heuristic parse — returns { asset, conditions[], notify[] } or null. */
 export function heuristicParseAlert(text) {
   const t = String(text || '').toLowerCase()
-  const tickers = t.match(/\b(btc|eth|sol|bnb|xrp|doge|avax|ada|nvda|tsla|aapl|msft|amzn|googl|meta|amd|coin|mstr)\b/gi)
-  if (!tickers) return null
-  const asset = tickers[0].toUpperCase()
+  // Shared matcher: whole universe, case-aware for tickers that double as
+  // words (COST, CAT, SPY) so "if the cost drops" never arms a Costco alert.
+  const [asset] = findTickers(text)
+  if (!asset) return null
   const conditions = []
   // "price < 70000" / "below 70000" / "drops below 70000" / "under $70k"
   const priceMatch = t.match(/(?:price|value|below|under|above|over|drops? (?:to|below)|breaks? (?:above|below))\s*\$?([0-9]+(?:\.[0-9]+)?)(k|m|b)?/i)
@@ -66,7 +68,7 @@ Text: "${text}"
 
 Return JSON matching:
 {
-  "asset": "<TICKER: BTC ETH SOL BNB XRP DOGE AVAX ADA NVDA TSLA AAPL MSFT AMZN GOOGL META AMD COIN MSTR>",
+  "asset": "<TICKER: ${DEMO_UNIVERSE.map(a => a.symbol).join(' ')}>",
   "conditions": [
     { "field": "price"|"change24h"|"rsi14"|"atrPct"|"fundingRate"|"ema20"|"ema50"|"newsRelevance"|"change7d", "op": "<"|">"|"<="|">="|"=="|"!=", "value": <number or "HIGH"|"MED"|"LOW"> }
   ],
@@ -78,6 +80,7 @@ Only return valid JSON.`
     if (!raw?.asset || !Array.isArray(raw.conditions)) return null
     raw.conditions = raw.conditions.filter(c => FIELDS.has(c.field) && OPS.has(c.op)).slice(0, 5)
     if (!raw.conditions.length) return null
+    if (!DEMO_UNIVERSE.some(a => a.symbol === String(raw.asset).toUpperCase())) return null
     return { asset: String(raw.asset).toUpperCase(), conditions: raw.conditions, notify: Array.isArray(raw.notify) ? raw.notify : ['push'] }
   } catch { return null }
 }

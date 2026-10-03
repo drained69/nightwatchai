@@ -799,6 +799,10 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 
 /* --------------------------------------------------- Analysis workbench */
 .analysis-picker { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 4px }
+.analysis-search { max-width: 320px; width: 100%; padding: 7px 10px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-soft); font: inherit; font-size: 13px }
+.analysis-search:focus { outline: none; border-color: var(--line-2) }
+.analysis-chips { max-height: 132px; overflow-y: auto }
+.watch-add { padding: 5px 8px; background: var(--panel-2); color: var(--text); border: 1px dashed var(--line-soft); font: inherit; font-size: 12px; max-width: 100% }
 .analysis-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 20px; flex-wrap: wrap }
 .analysis-header .ah-left { display: flex; align-items: center; gap: 18px; flex-wrap: wrap }
 .analysis-header .ah-right { flex-wrap: wrap; justify-content: flex-end }

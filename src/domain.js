@@ -45,6 +45,96 @@ export const INTENTS = ['research', 'thesis-test', 'portfolio-impact', 'executio
 
 /** @typedef {{ symbol: string, name: string, class: 'crypto'|'tokenized-equity', sector: string, price: number, change24h: number, change7d: number, marketCap: number, momentum: 'HIGH'|'MED'|'LOW', volatility: 'HIGH'|'MED'|'LOW', liquidity: 'HIGH'|'MED'|'LOW', beta: number, event?: string, atrPct: number }} MarketRow */
 
+/**
+ * Extended tokenized-equity coverage: [symbol, name, sector, seedPrice, beta, atrPct, marketCapUsdBn].
+ * Seed price/ATR/beta are rough offline placeholders (change24h/7d seed at 0) —
+ * with the API reachable every row is replaced by the real Bitget R-pair tape,
+ * and the server skips any pair Bitget doesn't list (see bitget.mjs isListed).
+ */
+const EXTENDED_EQUITIES = [
+  // Semis / AI hardware
+  ['AVGO', 'Broadcom',             'Semis / AI',        380,  1.45, 3.0, 1800],
+  ['TSM',  'Taiwan Semiconductor', 'Semis / AI',        300,  1.30, 2.6, 1550],
+  ['INTC', 'Intel',                'Semis',              38,  1.25, 3.6,  165],
+  ['MU',   'Micron',               'Semis / Memory',    240,  1.60, 4.0,  270],
+  ['QCOM', 'Qualcomm',             'Semis',             170,  1.25, 2.4,  185],
+  ['ARM',  'Arm Holdings',         'Semis / AI',        160,  1.90, 4.2,  170],
+  ['SMCI', 'Super Micro Computer', 'AI servers',         48,  2.20, 5.5,   28],
+  // Software / internet / media
+  ['ORCL', 'Oracle',               'Cloud / AI',        290,  1.35, 3.2,  820],
+  ['PLTR', 'Palantir',             'Software / AI',     175,  2.30, 4.5,  410],
+  ['CRM',  'Salesforce',           'Software',          250,  1.15, 2.2,  240],
+  ['ADBE', 'Adobe',                'Software',          360,  1.10, 2.2,  155],
+  ['NFLX', 'Netflix',              'Streaming',         100,  1.15, 2.3,  430],
+  ['IBM',  'IBM',                  'Enterprise tech',   280,  0.80, 1.8,  260],
+  ['CSCO', 'Cisco',                'Networking',         72,  0.85, 1.6,  285],
+  ['CRWD', 'CrowdStrike',          'Cybersecurity',     480,  1.40, 3.0,  120],
+  ['PANW', 'Palo Alto Networks',   'Cybersecurity',     200,  1.10, 2.4,  135],
+  ['SNOW', 'Snowflake',            'Software / Data',   230,  1.50, 3.6,   77],
+  ['SHOP', 'Shopify',              'E-commerce',        150,  1.90, 3.8,  195],
+  ['UBER', 'Uber',                 'Mobility',           95,  1.40, 2.6,  200],
+  ['ABNB', 'Airbnb',               'Travel',            125,  1.30, 2.6,   78],
+  ['RBLX', 'Roblox',               'Gaming',            120,  1.60, 4.0,   80],
+  ['DUOL', 'Duolingo',             'EdTech',            300,  1.50, 4.5,   14],
+  ['ROKU', 'Roku',                 'Streaming',         100,  1.90, 4.2,   14],
+  ['TTD',  'The Trade Desk',       'Ad tech',            50,  1.70, 4.5,   25],
+  ['DIS',  'Disney',               'Media',             115,  1.05, 1.8,  210],
+  ['SONY', 'Sony',                 'Consumer tech',      28,  0.90, 1.8,  170],
+  // Crypto-linked equities
+  ['HOOD', 'Robinhood',            'Brokerage / Crypto',120,  2.40, 5.0,  105],
+  ['CRCL', 'Circle',               'Stablecoins',       130,  2.50, 7.0,   30],
+  ['MARA', 'MARA Holdings',        'BTC miner',          17,  3.00, 6.5,    6],
+  ['RIOT', 'Riot Platforms',       'BTC miner',          14,  3.00, 6.5,    5],
+  ['BMNR', 'BitMine Immersion',    'ETH treasury',       45,  3.20, 8.0,   10],
+  // Financials / payments
+  ['JPM',  'JPMorgan Chase',       'Banks',             300,  1.05, 1.5,  830],
+  ['BAC',  'Bank of America',      'Banks',              50,  1.20, 1.7,  380],
+  ['GS',   'Goldman Sachs',        'Banks',             780,  1.30, 1.9,  240],
+  ['V',    'Visa',                 'Payments',          345,  0.95, 1.4,  670],
+  ['MA',   'Mastercard',           'Payments',          570,  1.00, 1.4,  520],
+  ['PYPL', 'PayPal',               'Payments',           68,  1.30, 2.6,   66],
+  // Consumer
+  ['WMT',  'Walmart',              'Retail',            100,  0.60, 1.4,  800],
+  ['COST', 'Costco',               'Retail',            950,  0.80, 1.5,  420],
+  ['KO',   'Coca-Cola',            'Staples',            69,  0.55, 1.1,  300],
+  ['PEP',  'PepsiCo',              'Staples',           145,  0.55, 1.3,  200],
+  ['MCD',  "McDonald's",           'Restaurants',       305,  0.65, 1.2,  220],
+  ['NKE',  'Nike',                 'Apparel',            70,  1.10, 2.6,  105],
+  ['SBUX', 'Starbucks',            'Restaurants',        88,  1.00, 2.2,  100],
+  // Healthcare
+  ['LLY',  'Eli Lilly',            'Pharma / GLP-1',    800,  0.70, 2.4,  760],
+  ['UNH',  'UnitedHealth',         'Managed care',      330,  0.75, 2.5,  300],
+  ['JNJ',  'Johnson & Johnson',    'Pharma',            185,  0.50, 1.2,  445],
+  ['PFE',  'Pfizer',               'Pharma',             25,  0.60, 1.6,  145],
+  ['ABBV', 'AbbVie',               'Pharma',            220,  0.60, 1.5,  390],
+  ['NVO',  'Novo Nordisk',         'Pharma / GLP-1',     55,  0.80, 3.0,  245],
+  ['MRNA', 'Moderna',              'Biotech',            27,  1.60, 5.0,   10],
+  // Energy / industrials / defense
+  ['XOM',  'Exxon Mobil',          'Energy',            112,  0.85, 1.6,  480],
+  ['CVX',  'Chevron',              'Energy',            155,  0.90, 1.7,  270],
+  ['BA',   'Boeing',               'Aerospace',         220,  1.30, 2.4,  170],
+  ['LMT',  'Lockheed Martin',      'Defense',           480,  0.50, 1.5,  112],
+  ['GE',   'GE Aerospace',         'Aerospace',         280,  1.20, 2.0,  300],
+  ['CAT',  'Caterpillar',          'Industrials',       480,  1.10, 2.0,  225],
+  // Autos / EV / China
+  ['RIVN', 'Rivian',               'Auto / EV',          14,  1.90, 4.8,   16],
+  ['LCID', 'Lucid',                'Auto / EV',          20,  2.00, 5.5,    6],
+  ['RACE', 'Ferrari',              'Luxury auto',       420,  0.90, 1.8,   75],
+  ['BABA', 'Alibaba',              'China tech',        160,  1.20, 3.4,  380],
+  // Index ETFs
+  ['SPY',  'SPDR S&P 500 ETF',     'Index ETF',         670,  1.00, 0.9,  680],
+  ['QQQ',  'Invesco QQQ',          'Index ETF',         600,  1.15, 1.1,  390],
+]
+
+function extendedEquityRows() {
+  return EXTENDED_EQUITIES.map(([symbol, name, sector, price, beta, atrPct, capBn]) => ({
+    symbol, name, class: 'tokenized-equity', sector, price, change24h: 0, change7d: 0,
+    marketCap: capBn * 1e9, momentum: 'LOW',
+    volatility: atrPct >= 4 ? 'HIGH' : atrPct >= 2 ? 'MED' : 'LOW',
+    liquidity: 'MED', beta, event: 'None', atrPct,
+  }))
+}
+
 export const DEMO_UNIVERSE = [
   // TOKENIZED U.S. EQUITIES — primary universe (Bitget spot R-pairs like RNVDAUSDT track the real NASDAQ/NYSE prints).
   { symbol: 'NVDA',  name: 'NVIDIA',       class: 'tokenized-equity', sector: 'Semis / AI',     price: 212.50, change24h: -2.4, change7d: -1.4, marketCap: 5200000000000, momentum: 'MED',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.62, event: 'Anthropic stake chatter', atrPct: 3.4 },
@@ -66,14 +156,39 @@ export const DEMO_UNIVERSE = [
   { symbol: 'DOGE',  name: 'Dogecoin',     class: 'crypto',           sector: 'Meme',           price: 0.0840, change24h:  0.7, change7d: -2.6, marketCap:   12600000000, momentum: 'LOW',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.72, event: 'ETF wind-down',    atrPct: 6.1 },
   { symbol: 'AVAX',  name: 'Avalanche',    class: 'crypto',           sector: 'Smart contract', price:   7.50, change24h:  2.7, change7d:  1.2, marketCap:    3200000000, momentum: 'MED',  volatility: 'HIGH', liquidity: 'HIGH', beta: 1.31, event: 'None',             atrPct: 4.0 },
   { symbol: 'ADA',   name: 'Cardano',      class: 'crypto',           sector: 'Smart contract', price:  0.209, change24h:  2.4, change7d: -1.8, marketCap:    7400000000, momentum: 'LOW',  volatility: 'MED',  liquidity: 'HIGH', beta: 1.10, event: 'None',             atrPct: 3.6 },
+  // EXTENDED TOKENIZED EQUITIES — more of Bitget's R-prefixed stock pairs (RPLTRUSDT, RHOODUSDT, …).
+  ...extendedEquityRows(),
 ]
 
 export const CRYPTO_SYMBOLS = new Set(DEMO_UNIVERSE.filter(a => a.class === 'crypto').map(a => a.symbol))
+export const EQUITY_SYMBOLS = DEMO_UNIVERSE.filter(a => a.class === 'tokenized-equity').map(a => a.symbol)
+export const CRYPTO_SYMBOL_LIST = DEMO_UNIVERSE.filter(a => a.class === 'crypto').map(a => a.symbol)
+
+/**
+ * Tickers that are also everyday words or very short ("cost", "cat", "spy",
+ * "V"). They only count as a mention when written in caps or $-prefixed, so
+ * "what does it cost" never resolves to Costco.
+ */
+const AMBIGUOUS_TICKERS = new Set(['ARM', 'HOOD', 'COST', 'PEP', 'BA', 'GE', 'CAT', 'RACE', 'SPY', 'MA', 'V', 'KO', 'DIS', 'MU', 'SNOW', 'SHOP', 'UBER', 'GS'])
+
+/** Every universe ticker mentioned in `text`, in universe order. */
+export function findTickers(text) {
+  const raw = String(text || '')
+  const upper = raw.toUpperCase()
+  const out = []
+  for (const { symbol } of DEMO_UNIVERSE) {
+    const hit = AMBIGUOUS_TICKERS.has(symbol)
+      ? new RegExp(`\\$${symbol}(?![A-Za-z0-9])`, 'i').test(raw) || new RegExp(`(^|[^A-Za-z0-9])${symbol}(?![A-Za-z0-9])`).test(raw)
+      : new RegExp(`(^|[^A-Z0-9])${symbol}(?![A-Z0-9])`).test(upper)
+    if (hit) out.push(symbol)
+  }
+  return out
+}
 
 /* ------------------------------------------------------------------- Session */
 
 const seedLogs = [
-  { id: 'log-1', time: '00:00:00', type: 'BOOT', message: 'NIGHTWATCH AI online', detail: '18 assets in universe · 5 research skills armed' },
+  { id: 'log-1', time: '00:00:00', type: 'BOOT', message: 'NIGHTWATCH AI online', detail: `${DEMO_UNIVERSE.length} assets in universe · 5 research skills armed` },
   { id: 'log-2', time: '00:00:01', type: 'BOOT', message: 'Awaiting trader question', detail: 'Type a research question to invoke the skill pack' },
 ]
 
@@ -155,7 +270,11 @@ export function coerceSession(parsed) {
     })() },
     settings: { ...seed.settings, ...(parsed.settings || {}), paperOnly: true },
     universe: seed.universe,                              // universe always seeded from source
-    markets: Array.isArray(parsed.markets) && parsed.markets.length ? parsed.markets : seed.markets,
+    // Keep saved rows, but follow the source universe — sessions saved before
+    // the coverage expanded must still list every newly added symbol.
+    markets: Array.isArray(parsed.markets) && parsed.markets.length
+      ? seed.markets.map(m => parsed.markets.find(p => p?.symbol === m.symbol) || m)
+      : seed.markets,
     logs: Array.isArray(parsed.logs) ? parsed.logs.slice(-160) : seed.logs,
     reports: Array.isArray(parsed.reports) ? parsed.reports : [],
     signals: Array.isArray(parsed.signals) ? parsed.signals : [],
@@ -301,19 +420,22 @@ export function classifyIntent(question) {
   if (lower.startsWith('/thesis') || lower.startsWith('/challenge') || /(stress[- ]?test|challenge|invalidat|counter)/i.test(lower)) return { intent: 'thesis-test', asset: inferAsset(q), question: q, thesis: q }
   if (/(portfolio|book|expos|beta|allocation).*(impact|effect|affect|change)/i.test(lower) || /(how does .* affect|impact on)/i.test(lower)) return { intent: 'portfolio-impact', asset: inferAsset(q), question: q }
   if (/(execute|order|slice|entry|stop|target|position size|size the trade|how much should)/i.test(lower)) return { intent: 'execution-help', asset: inferAsset(q), question: q }
-  if (/(strongest|best|find|scan|opportunit|overnight|top)/i.test(lower) && !/(NVDA|AAPL|TSLA|BTC|ETH|SOL|MSFT|AMZN|GOOG|META|AMD|COIN|MSTR|BNB|XRP|DOGE|ADA|AVAX)/i.test(q)) return { intent: 'find-opportunities', asset: null, question: q }
+  if (/(strongest|best|find|scan|opportunit|overnight|top)/i.test(lower) && !inferAsset(q)) return { intent: 'find-opportunities', asset: null, question: q }
   return { intent: 'research', asset: inferAsset(q), question: q }
 }
 
+/** Company names that are also everyday words — matched only when capitalised. */
+const AMBIGUOUS_NAMES = new Set(['Circle', 'Intel', 'Lucid', 'Uber', 'Visa', 'Oracle', 'Nike'])
+
 export function inferAsset(question) {
-  const q = (question || '').toUpperCase()
-  const stripped = q.replace(/[^A-Z0-9 ]/g, ' ')
+  const q = String(question || '')
+  const [ticker] = findTickers(q)
+  if (ticker) return ticker
+  // Whole-word name match so "intelligence" never resolves to Intel.
   for (const asset of DEMO_UNIVERSE) {
-    const rx = new RegExp(`\\b${asset.symbol}\\b`)
-    if (rx.test(stripped)) return asset.symbol
-  }
-  for (const asset of DEMO_UNIVERSE) {
-    if (q.includes(asset.name.toUpperCase())) return asset.symbol
+    const name = asset.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const flags = AMBIGUOUS_NAMES.has(asset.name) ? '' : 'i'
+    if (new RegExp(`(^|[^A-Za-z0-9])${name}(?![A-Za-z0-9])`, flags).test(q)) return asset.symbol
   }
   return null
 }

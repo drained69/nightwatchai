@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { pairFor, isSupported, SYMBOL_MAP } from '../providers/bitget.mjs'
+import { pairFor, isSupported, isListed, SYMBOL_MAP } from '../providers/bitget.mjs'
 import { heuristicClassify, parseRss } from '../providers/news.mjs'
 import {
   DEMO_UNIVERSE, DemoMarketData, runSkillPack, synthesizeSignal,
@@ -9,9 +9,9 @@ import {
 } from '../../src/domain.js'
 import { runBacktestFromCandles } from '../../src/backtest.js'
 
-/* ---------- bitget symbol map: full 18-asset universe, equities included ---------- */
+/* ---------- bitget symbol map: full universe, equities included ---------- */
 
-test('bitget map covers all 18 universe assets including R-prefixed tokenized equities', () => {
+test('bitget map covers every universe asset including R-prefixed tokenized equities', () => {
   for (const asset of DEMO_UNIVERSE) {
     assert.ok(isSupported(asset.symbol), `${asset.symbol} must be supported`)
     assert.equal(pairFor(asset.symbol), SYMBOL_MAP.get(asset.symbol))
@@ -19,7 +19,13 @@ test('bitget map covers all 18 universe assets including R-prefixed tokenized eq
   assert.equal(pairFor('NVDA'), 'RNVDAUSDT')
   assert.equal(pairFor('tsla'), 'RTSLAUSDT')     // case-insensitive
   assert.equal(pairFor('BTC'), 'BTCUSDT')
+  assert.equal(pairFor('PLTR'), 'RPLTRUSDT')
+  assert.equal(pairFor('SPY'), 'RSPYUSDT')
   assert.equal(pairFor('NOPE'), null)
+  assert.equal(SYMBOL_MAP.size, DEMO_UNIVERSE.length)
+  // Before Bitget's spot list has been seen, nothing is skipped.
+  assert.equal(isListed('PLTR'), true)
+  assert.equal(isListed('NOPE'), false)
 })
 
 /* ---------- news classifier: word boundaries + direction ---------- */

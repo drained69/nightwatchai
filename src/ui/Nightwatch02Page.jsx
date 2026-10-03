@@ -167,7 +167,10 @@ function SubscriptionToggle({ user, status }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState(null)
   const token = getToken()
-  const mailerReady = status?.mailer?.canDeliver
+  // Tri-state: true / false from the server, undefined while /nightwatch/status
+  // is loading or unreachable. Only a definite `false` may show the warning —
+  // treating "unknown" as "not configured" flashed it on every page load.
+  const mailerReady = status?.mailer?.canDeliver ?? sub?.mailerReady
 
   useEffect(() => {
     if (!user || !token || !hasApi()) return
@@ -194,7 +197,7 @@ function SubscriptionToggle({ user, status }) {
       })
       setSub(r)
       setNote(enabled
-        ? (r.mailerReady ? 'Daily brief enabled — you\'ll receive it at 02:00 UTC.' : 'Preference saved — email delivery is not configured on this server yet.')
+        ? (r.mailerReady !== false ? 'Daily brief enabled — you\'ll receive it at 02:00 UTC.' : 'Preference saved — email delivery is not configured on this server yet.')
         : 'Daily emails turned off.')
     } catch (e) { setNote(`Could not save: ${e.message}`) } finally { setBusy(false) }
   }
@@ -208,7 +211,7 @@ function SubscriptionToggle({ user, status }) {
           {sub?.enabled
             ? 'Delivering to your email at 02:00 UTC. Unsubscribe anytime from the email footer or right here.'
             : 'We\'ll send the daily brief to your registered email once you enable it.'}
-          {!mailerReady && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
+          {mailerReady === false && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
         </div>
         {note && <div className="nw02-sub-note">{note}</div>}
       </div>

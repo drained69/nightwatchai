@@ -9,12 +9,16 @@
  * The classifier is a hybrid:
  *   1. If LLM key available (XAI/ANTHROPIC/OPENAI): ask the model for a
  *      strict-JSON impact analysis. Cache per news hash.
- *   2. Otherwise: keyword-heuristic classifier over the 18-asset universe.
+ *   2. Otherwise: keyword-heuristic classifier over the asset universe.
  *
  * No new dependencies. RSS parsing is regex-based over well-formed RSS 2.0.
  */
 import crypto from 'node:crypto'
 import { logger } from '../lib/log.mjs'
+import { DEMO_UNIVERSE } from '../../src/domain.js'
+
+const UNIVERSE_TICKERS = DEMO_UNIVERSE.map(a => a.symbol)
+const UNIVERSE_TICKER_SET = new Set(UNIVERSE_TICKERS)
 
 const NEWS_TIMEOUT_MS = Number(process.env.NEWS_TIMEOUT_MS || 6000)
 const NEWS_POLL_MS    = Number(process.env.NEWS_POLL_MS    || 60_000)      // 60s
@@ -28,7 +32,7 @@ const NEWS_KEEP_MAX   = Number(process.env.NEWS_KEEP_MAX   || 120)
  */
 const SEC_UA = process.env.SEC_USER_AGENT || 'NightwatchAI Research admin@nightwatch.local'
 
-// SEC EDGAR CIKs for the 10 tokenized-equity universe symbols. Used to build
+// SEC EDGAR CIKs for the core tokenized-equity names. Used to build
 // per-company Form 4 (insider transaction) feeds so we actually catch filings
 // on the names our users trade — the global Form 4 firehose is 99% unrelated.
 const EQUITY_CIK = {
@@ -140,6 +144,71 @@ const ASSET_HINTS = [
   { symbol: 'AMD',   words: ['advanced micro', 'amd ', 'lisa su', 'mi300', 'mi400'] },
   { symbol: 'COIN',  words: ['coinbase', 'coin '] },
   { symbol: 'MSTR',  words: ['microstrategy', 'mstr', 'saylor'] },
+  // Extended tokenized equities — names and unambiguous tickers only, so
+  // everyday words ("cost", "arm", "snow") never tag a headline.
+  { symbol: 'AVGO',  words: ['broadcom', 'avgo', 'hock tan'] },
+  { symbol: 'TSM',   words: ['tsmc', 'taiwan semiconductor'] },
+  { symbol: 'INTC',  words: ['intel', 'intc', 'lip-bu tan'] },
+  { symbol: 'MU',    words: ['micron'] },
+  { symbol: 'QCOM',  words: ['qualcomm', 'qcom', 'snapdragon'] },
+  { symbol: 'ARM',   words: ['arm holdings'] },
+  { symbol: 'SMCI',  words: ['super micro', 'supermicro', 'smci'] },
+  { symbol: 'ORCL',  words: ['oracle', 'orcl', 'larry ellison'] },
+  { symbol: 'PLTR',  words: ['palantir', 'pltr', 'alex karp'] },
+  { symbol: 'CRM',   words: ['salesforce', 'marc benioff'] },
+  { symbol: 'ADBE',  words: ['adobe', 'adbe'] },
+  { symbol: 'NFLX',  words: ['netflix', 'nflx'] },
+  { symbol: 'IBM',   words: ['ibm'] },
+  { symbol: 'CSCO',  words: ['cisco', 'csco'] },
+  { symbol: 'CRWD',  words: ['crowdstrike', 'crwd'] },
+  { symbol: 'PANW',  words: ['palo alto networks', 'panw'] },
+  { symbol: 'SNOW',  words: ['snowflake'] },
+  { symbol: 'SHOP',  words: ['shopify'] },
+  { symbol: 'UBER',  words: ['uber'] },
+  { symbol: 'ABNB',  words: ['airbnb', 'abnb'] },
+  { symbol: 'RBLX',  words: ['roblox', 'rblx'] },
+  { symbol: 'DUOL',  words: ['duolingo'] },
+  { symbol: 'ROKU',  words: ['roku'] },
+  { symbol: 'TTD',   words: ['the trade desk', 'trade desk'] },
+  { symbol: 'DIS',   words: ['disney', 'walt disney'] },
+  { symbol: 'SONY',  words: ['sony'] },
+  { symbol: 'HOOD',  words: ['robinhood', 'vlad tenev'] },
+  { symbol: 'CRCL',  words: ['circle internet', 'crcl', 'usdc issuer'] },
+  { symbol: 'MARA',  words: ['mara holdings', 'marathon digital'] },
+  { symbol: 'RIOT',  words: ['riot platforms'] },
+  { symbol: 'BMNR',  words: ['bitmine', 'bmnr', 'tom lee'] },
+  { symbol: 'JPM',   words: ['jpmorgan', 'jp morgan', 'jamie dimon'] },
+  { symbol: 'BAC',   words: ['bank of america'] },
+  { symbol: 'GS',    words: ['goldman sachs', 'goldman'] },
+  { symbol: 'V',     words: ['visa inc', 'visa\'s'] },
+  { symbol: 'MA',    words: ['mastercard'] },
+  { symbol: 'PYPL',  words: ['paypal', 'pypl', 'pyusd'] },
+  { symbol: 'WMT',   words: ['walmart', 'wmt'] },
+  { symbol: 'COST',  words: ['costco'] },
+  { symbol: 'KO',    words: ['coca-cola', 'coca cola'] },
+  { symbol: 'PEP',   words: ['pepsico', 'pepsi'] },
+  { symbol: 'MCD',   words: ['mcdonald\'s', 'mcdonalds'] },
+  { symbol: 'NKE',   words: ['nike'] },
+  { symbol: 'SBUX',  words: ['starbucks', 'sbux'] },
+  { symbol: 'LLY',   words: ['eli lilly', 'lilly', 'mounjaro', 'zepbound'] },
+  { symbol: 'UNH',   words: ['unitedhealth', 'unh'] },
+  { symbol: 'JNJ',   words: ['johnson & johnson', 'johnson and johnson', 'jnj'] },
+  { symbol: 'PFE',   words: ['pfizer', 'pfe'] },
+  { symbol: 'ABBV',  words: ['abbvie', 'abbv'] },
+  { symbol: 'NVO',   words: ['novo nordisk', 'wegovy', 'ozempic'] },
+  { symbol: 'MRNA',  words: ['moderna'] },
+  { symbol: 'XOM',   words: ['exxon', 'exxonmobil', 'xom'] },
+  { symbol: 'CVX',   words: ['chevron', 'cvx'] },
+  { symbol: 'BA',    words: ['boeing'] },
+  { symbol: 'LMT',   words: ['lockheed', 'lockheed martin'] },
+  { symbol: 'GE',    words: ['ge aerospace'] },
+  { symbol: 'CAT',   words: ['caterpillar'] },
+  { symbol: 'RIVN',  words: ['rivian', 'rivn'] },
+  { symbol: 'LCID',  words: ['lucid group', 'lucid motors', 'lcid'] },
+  { symbol: 'RACE',  words: ['ferrari'] },
+  { symbol: 'BABA',  words: ['alibaba', 'baba'] },
+  { symbol: 'SPY',   words: ['s&p 500', 'sp500', 's&p500'] },
+  { symbol: 'QQQ',   words: ['nasdaq 100', 'nasdaq-100', 'qqq'] },
 ]
 
 const UP_WORDS   = ['beat', 'beats', 'surge', 'surges', 'rally', 'rallies', 'soar', 'soars', 'jump', 'jumps', 'spike', 'spikes', 'rise', 'rises', 'climb', 'climbs', 'advance', 'advances', 'gain', 'gains', 'record', 'approve', 'approved', 'approval', 'positive', 'strong', 'upgrade', 'upgrades', 'raises', 'raise', 'exceeds', 'inflow', 'inflows', 'bullish', 'boost', 'boosts', 'adopt', 'adoption', 'win', 'wins', 'halving', 'breakout', 'accumulation', 'buyback', 'buybacks']
@@ -201,7 +270,7 @@ export function heuristicClassify(item) {
 
 async function llmClassify(item, llm) {
   if (!llm?.enabled) return null
-  const prompt = `You are a financial news impact analyst. Classify this headline against these tickers only: BTC ETH SOL BNB XRP DOGE AVAX ADA NVDA TSLA AAPL MSFT AMZN GOOGL META AMD COIN MSTR.
+  const prompt = `You are a financial news impact analyst. Classify this headline against these tickers only: ${UNIVERSE_TICKERS.join(' ')}.
 
 Return JSON ONLY, matching:
 {
@@ -223,7 +292,7 @@ Source: ${item.source}`
         direction: ['UP','DOWN','MIXED'].includes(a.direction) ? a.direction : 'MIXED',
         magnitude: Math.max(0, Math.min(1, Number(a.magnitude) || 0)),
         reasoning: String(a.reasoning || '').slice(0, 240),
-      })).filter(a => /^[A-Z]{3,5}$/.test(a.symbol)),
+      })).filter(a => UNIVERSE_TICKER_SET.has(a.symbol)),
       category: ['earnings','macro','regulatory','on-chain','product','geopolitical','exchange'].includes(raw.category) ? raw.category : 'macro',
       severity: ['HIGH','MEDIUM','LOW'].includes(raw.severity) ? raw.severity : 'MEDIUM',
       regimeShift: ['RISK_ON','RISK_OFF'].includes(raw.regimeShift) ? raw.regimeShift : null,

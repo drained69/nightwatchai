@@ -69,6 +69,10 @@ const SECTOR_OF = {
   TSLA: 'Auto / EV', AAPL: 'Consumer Tech', MSFT: 'Cloud / AI',
   META: 'Digital Ads', GOOGL: 'Digital Ads', AMZN: 'E-commerce / Cloud',
   MSTR: 'Crypto-linked Equity', COIN: 'Crypto-linked Equity',
+  AVGO: 'Semiconductors', INTC: 'Semiconductors', MU: 'Semiconductors', QCOM: 'Semiconductors',
+  ARM: 'Semiconductors', SMCI: 'Semiconductors',
+  HOOD: 'Crypto-linked Equity', CRCL: 'Crypto-linked Equity', MARA: 'Crypto-linked Equity',
+  RIOT: 'Crypto-linked Equity', BMNR: 'Crypto-linked Equity',
 }
 function sectorOf(row) { return SECTOR_OF[row.symbol] || row.sector || 'Other' }
 
@@ -257,7 +261,9 @@ export async function generateBrief({ newsStore, engine = new LocalNightwatchEng
     },
     // getMacro() above can fail transiently (Yahoo); the shared context fetched
     // it again moments later — fall back to that before rendering "—".
-    marketSummary: summarizeMarket(universe, macro || sharedCtx.macro || null),
+    // Summarise the real tape only — seeded placeholder rows (pairs Bitget
+    // couldn't quote) would drag averages toward 0%. Seeded only when offline.
+    marketSummary: summarizeMarket(liveRows.length ? liveRows : universe, macro || sharedCtx.macro || null),
     unusualMovements: findUnusualMovements(universe, bySymbol),
     alphaCandidates: candidates,
     disclaimer: 'Alpha of the Day is AI-generated research on tokenized U.S. stocks, not investment advice. Prices and news carry a source timestamp; missing data is labeled. Do your own diligence before trading.',

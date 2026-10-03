@@ -16,7 +16,7 @@
  */
 
 import { WebSocket } from 'ws'
-import { SYMBOL_MAP } from './bitget.mjs'
+import { SYMBOL_MAP, getAllTickers, isListed } from './bitget.mjs'
 import { logger } from '../lib/log.mjs'
 
 const WS_URL = process.env.BITGET_WS_URL || 'wss://ws.bitget.com/v2/ws/public'
@@ -64,26 +64,33 @@ function connect() {
     return
   }
 
-  ws.on('open', () => {
+  ws.on('open', async () => {
     lastConnectAt = Date.now()
     reconnectDelayMs = RECONNECT_MIN_MS
     logger.info({ url: WS_URL }, 'bitget-ws: connected')
-    // Subscribe to ticker for every mapped pair.
+    const sock = ws
+    // Heartbeat: plain "ping" string per Bitget spec. Started before the
+    // listing lookup below so a slow REST call can't idle the socket out.
+    heartbeatTimer = setInterval(() => {
+      try { if (ws?.readyState === WebSocket.OPEN) ws.send('ping') } catch { /* fatal fires close handler */ }
+    }, HEARTBEAT_MS)
+    // Learn Bitget's spot list first so a pair it doesn't list can't fail a
+    // whole subscribe batch. If REST is down every pair is tried.
+    await getAllTickers().catch(() => null)
+    if (ws !== sock || sock.readyState !== WebSocket.OPEN) return
+    // Subscribe to ticker for every mapped, listed pair.
     const args = []
     subscribedPairs = new Set()
-    for (const [, pair] of SYMBOL_MAP) {
+    for (const [sym, pair] of SYMBOL_MAP) {
+      if (!isListed(sym)) continue
       args.push({ instType: 'SPOT', channel: 'ticker', instId: pair })
       subscribedPairs.add(pair)
     }
     // Bitget accepts up to 50 args per op; batch conservatively.
     const CHUNK = 20
     for (let i = 0; i < args.length; i += CHUNK) {
-      ws.send(JSON.stringify({ op: 'subscribe', args: args.slice(i, i + CHUNK) }))
+      sock.send(JSON.stringify({ op: 'subscribe', args: args.slice(i, i + CHUNK) }))
     }
-    // Heartbeat: plain "ping" string per Bitget spec.
-    heartbeatTimer = setInterval(() => {
-      try { if (ws?.readyState === WebSocket.OPEN) ws.send('ping') } catch { /* fatal fires close handler */ }
-    }, HEARTBEAT_MS)
   })
 
   ws.on('message', (raw) => {

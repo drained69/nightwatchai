@@ -2374,10 +2374,18 @@ function SettingsPage({ session, setSession, onReset, user, setPage }) {
                 onClick={() => setSession(s => ({ ...s, watchlist: s.watchlist.filter(x => x !== sym) }))}>×</button>
             </div>
           ))}
-          {session.universe.filter(u => !session.watchlist.includes(u.symbol)).map(u => (
-            <button key={u.symbol} className="watch-tag ghost" title={`Add ${u.symbol} to watchlist`}
-              onClick={() => setSession(s => ({ ...s, watchlist: [...s.watchlist, u.symbol] }))}>+ {u.symbol}</button>
-          ))}
+          {/* 80+ symbols — a picker instead of one tag per symbol. */}
+          <select className="watch-add" value="" aria-label="Add symbol to watchlist"
+            onChange={e => { const sym = e.target.value; if (sym) setSession(s => s.watchlist.includes(sym) ? s : ({ ...s, watchlist: [...s.watchlist, sym] })) }}>
+            <option value="">+ Add symbol…</option>
+            {[['Stocks & ETFs', 'tokenized-equity'], ['Crypto', 'crypto']].map(([label, klass]) => (
+              <optgroup key={klass} label={label}>
+                {session.universe.filter(u => u.class === klass && !session.watchlist.includes(u.symbol)).map(u => (
+                  <option key={u.symbol} value={u.symbol}>{u.symbol} · {u.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
         </div>
       </div>
 

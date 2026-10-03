@@ -32,7 +32,7 @@ export async function liveEnhanceArtifact(artifact, prefs = null, engineCtx = nu
     getTicker(symbol).catch(() => null),
     computeIndicators(symbol).catch(() => null),
     isCrossSupported(symbol) ? getPositioning(symbol).catch(() => null) : null,   // perps exist for crypto only
-    getSpotBookDepth(symbol).catch(() => null),                                    // spot book: all 18 assets
+    getSpotBookDepth(symbol).catch(() => null),                                    // spot book: every universe asset
     getMarketIntelSnapshot(symbol).catch(() => null),
   ])
   const live = { ticker, indicators, positioning, book, intel }

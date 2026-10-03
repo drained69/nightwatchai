@@ -16,11 +16,12 @@ import {
   ExternalLink, LineChart, Newspaper, RefreshCw, ShieldCheck, TrendingUp, Zap,
 } from 'lucide-react'
 import { hasApi, apiUrl } from './apiBase.js'
-import { bitgetTradeUrl, fmtPct, fmtPrice, safeUrl } from '../domain.js'
+import { bitgetTradeUrl, fmtPct, fmtPrice, safeUrl, DEMO_UNIVERSE, EQUITY_SYMBOLS, CRYPTO_SYMBOL_LIST } from '../domain.js'
 
 // US equities pinned first — this desk's primary universe.
-const US_EQUITIES = ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'COIN', 'MSTR']
-const CRYPTO_MAJORS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA']
+const US_EQUITIES = EQUITY_SYMBOLS
+const CRYPTO_MAJORS = CRYPTO_SYMBOL_LIST
+const NAME_OF = Object.fromEntries(DEMO_UNIVERSE.map(a => [a.symbol, a.name]))
 
 function fmtUsd(n) {
   if (n == null || Number.isNaN(n)) return '—'
@@ -39,6 +40,7 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [assetClass, setAssetClass] = useState('EQUITY')   // EQUITY | CRYPTO
+  const [query, setQuery] = useState('')
 
   // Abort/supersede in-flight loads: without this a slow response for the
   // previously selected symbol can land after a fast one and paint mislabeled
@@ -86,7 +88,9 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
     return () => clearInterval(t)
   }, [symbol])
 
-  const symbols = assetClass === 'EQUITY' ? US_EQUITIES : CRYPTO_MAJORS
+  const q = query.trim().toUpperCase()
+  const symbols = (assetClass === 'EQUITY' ? US_EQUITIES : CRYPTO_MAJORS)
+    .filter(sym => !q || sym.includes(q) || NAME_OF[sym]?.toUpperCase().includes(q))
 
   const t   = data?.ticker
   const ind = data?.indicators
@@ -119,10 +123,15 @@ export function AnalysisPage({ initialSymbol = 'NVDA' }) {
           <button className={assetClass === 'EQUITY' ? 'chip on' : 'chip'} onClick={() => setAssetClass('EQUITY')}>US EQUITIES</button>
           <button className={assetClass === 'CRYPTO' ? 'chip on' : 'chip'} onClick={() => setAssetClass('CRYPTO')}>CRYPTO</button>
         </div>
-        <div className="chip-row">
+        {assetClass === 'EQUITY' && (
+          <input className="analysis-search" type="search" value={query} onChange={e => setQuery(e.target.value)}
+            placeholder={`Filter ${US_EQUITIES.length} stocks — ticker or name`} aria-label="Filter stocks" />
+        )}
+        <div className="chip-row analysis-chips">
           {symbols.map(sym => (
-            <button key={sym} className={sym === symbol ? 'chip on' : 'chip'} onClick={() => setSymbol(sym)}>{sym}</button>
+            <button key={sym} title={NAME_OF[sym]} className={sym === symbol ? 'chip on' : 'chip'} onClick={() => setSymbol(sym)}>{sym}</button>
           ))}
+          {!symbols.length && <small className="muted">No match for “{query}”.</small>}
         </div>
       </div>
 

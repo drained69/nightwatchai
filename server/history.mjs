@@ -13,16 +13,15 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { getCandles, isSupported } from './providers/bitget.mjs'
+import { getCandles, getAllTickers, isListed, SYMBOL_MAP } from './providers/bitget.mjs'
 import { paths } from './lib/store.mjs'
 import { logger } from './lib/log.mjs'
 
 const HISTORY_DIR = path.join(paths.DATA_DIR, 'history')
 const HISTORY_MAX_CANDLES  = Number(process.env.HISTORY_MAX_CANDLES  || 8000)   // hard cap (~11 months of 1h)
 const HISTORY_WARM_CANDLES = Number(process.env.HISTORY_WARM_CANDLES || 2000)   // first-warm target (~83 days of 1h)
-const SUPPORTED = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'AVAX', 'ADA',
-                   'NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'COIN', 'MSTR']
-  .filter(isSupported)
+// Every mapped Bitget pair: crypto majors first, then tokenized equities.
+const SUPPORTED = [...SYMBOL_MAP.keys()]
 
 // Symbols come from user-controlled paths/bodies — reject anything that could
 // escape HISTORY_DIR (path separators, dot segments) before touching the fs.
@@ -95,7 +94,11 @@ export async function refreshHistory(symbol) {
 /** Warm every supported symbol once. Best-effort. */
 export async function warmHistory() {
   const results = {}
+  // One bulk ticker call teaches the provider which pairs Bitget lists, so
+  // the warm doesn't page candles for pairs that can only 400.
+  await getAllTickers().catch(() => null)
   for (const symbol of SUPPORTED) {
+    if (!isListed(symbol)) { results[symbol] = 0; continue }
     try {
       const h = await refreshHistory(symbol)
       results[symbol] = h ? h.count : 0

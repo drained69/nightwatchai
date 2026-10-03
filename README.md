@@ -276,11 +276,11 @@ Every day at **02:00 UTC** the server scans the tokenized-equity universe and pu
 
 Nothing is fabricated. Prices, headlines, and timestamps flow from the same real data pipeline as the Research tab. Missing data is reported as `null` and labeled in both the UI and the email.
 
-**Reliability.** The scheduler is timezone-aware, uses a single `setTimeout` (not per-minute polling), and catches up on boot: if the server was down at 02:00 UTC and the day's brief file is missing, one generates immediately.
+**Reliability.** The scheduler uses a single UTC timer and catches up on boot. It reuses an existing daily brief, records successful deliveries per recipient, and retries undelivered recipients after restarts and every 30 minutes during the day. Each recipient's current subscription is checked immediately before sending.
 
 **Email opt-in.** Users toggle "Send me the Alpha of the Day report every day" from the page itself. The subscription is keyed to the signed-in account email — no one can subscribe a stranger. Every email includes a one-click unsubscribe link.
 
-**Setup checklist.** Set `RESEND_API_KEY`, optionally set `EMAIL_FROM` to a domain-verified sender, set `APP_URL` to the public URL so email links resolve correctly. In production, set `ADMIN_TOKEN` to gate manual `POST /nightwatch/run`. Confirm `/health` reports `mailer.canDeliver: true` and `nightwatch02.enabled: true`.
+**Setup checklist.** Set `RESEND_API_KEY` and `EMAIL_FROM` to a sender on a domain verified in Resend, and set `APP_URL` to the public URL so email links resolve correctly. In production, set `ADMIN_TOKEN` to gate manual `POST /nightwatch/run`. Confirm `/health` reports `mailer.canDeliver: true` and `nightwatch02.enabled: true`. A configured status only checks local settings; verify provider acceptance with a test subscription.
 
 ---
 

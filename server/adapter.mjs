@@ -1029,7 +1029,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /nightwatch/status') {
       // Public, cheap — surfaces schedule + mailer state so the UI can show
       // "next brief at 02:00 UTC" and warn when email delivery isn't wired.
-      return json(res, 200, { scheduler: nw02.status(), mailer: mailerStatus() })
+      return json(res, 200, { scheduler: nw02.status(), mailer: mailerStatus(), manualRunAllowed: process.env.NODE_ENV !== 'production' })
     }
     if (route === 'GET /nightwatch/subscription') {
       const user = requireAuth(req, res); if (!user) return

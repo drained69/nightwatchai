@@ -34,6 +34,12 @@ services:
       LOG_LEVEL: "info"
       CORS_ORIGIN: "*"
       NIGHTWATCH_DATA_DIR: /data
+      RESEND_API_KEY: "${RESEND_API_KEY:-}"
+      EMAIL_FROM: "${EMAIL_FROM:-}"
+      APP_URL: "${APP_URL:-http://localhost:8787}"
+      NIGHTWATCH_02_ENABLED: "${NIGHTWATCH_02_ENABLED:-1}"
+      NIGHTWATCH_02_HOUR: "${NIGHTWATCH_02_HOUR:-2}"
+      NIGHTWATCH_02_MINUTE: "${NIGHTWATCH_02_MINUTE:-0}"
       # Beta convenience: the SPA's sign-in uses email-only dev-login.
       # Remove this (and ship real auth) before taking on real users.
       ALLOW_DEV_LOGIN: "1"

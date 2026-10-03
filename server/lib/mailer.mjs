@@ -18,8 +18,8 @@
  */
 import { logger } from './log.mjs'
 
-const RESEND_KEY = () => process.env.RESEND_API_KEY || ''
-const DEFAULT_FROM = () => process.env.EMAIL_FROM || 'NIGHTWATCH AI <onboarding@resend.dev>'
+const RESEND_KEY = () => process.env.RESEND_API_KEY?.trim() || ''
+const DEFAULT_FROM = () => process.env.EMAIL_FROM?.trim() || ''
 const TIMEOUT_MS   = () => Number(process.env.EMAIL_TIMEOUT_MS || 10_000)
 
 /** Cheap sanity check — matches the shape auth.mjs enforces on sign-in. */
@@ -32,11 +32,14 @@ export function isValidEmail(e) { return typeof e === 'string' && EMAIL_RE.test(
  */
 export function mailerStatus() {
   const key = RESEND_KEY()
+  const from = DEFAULT_FROM()
+  const sender = from.match(/^(?:[^<>]+<)?([^<>\s]+@[^<>\s]+)>?$/)?.[1]
+  const ready = Boolean(key && sender && isValidEmail(sender) && !sender.endsWith('@resend.dev'))
   return {
     provider: key ? 'resend' : 'log-only',
-    from: DEFAULT_FROM(),
-    canDeliver: Boolean(key),
-    reason: key ? 'RESEND_API_KEY is set' : 'set RESEND_API_KEY (and EMAIL_FROM) to send real email',
+    from,
+    canDeliver: ready,
+    reason: !key ? 'RESEND_API_KEY is missing' : !ready ? 'set EMAIL_FROM to an address on your verified sending domain' : 'email configuration present',
   }
 }
 
@@ -46,12 +49,12 @@ export function mailerStatus() {
  * Never throws on transport errors — callers that need delivery guarantees
  * check `delivered`.
  */
-export async function sendEmail({ to, subject, html, text, from = null, replyTo = null }) {
+export async function sendEmail({ to, subject, html, text, from = null, replyTo = null, idempotencyKey = null }) {
   if (!isValidEmail(to)) return { delivered: false, transport: 'noop', reason: 'invalid recipient' }
   if (!subject || !html) return { delivered: false, transport: 'noop', reason: 'subject + html required' }
   const key = RESEND_KEY()
-  if (!key) {
-    logger.info({ to, subject }, 'EMAIL (no provider — set RESEND_API_KEY to send real email)')
+  if (!mailerStatus().canDeliver) {
+    logger.warn({ to, reason: mailerStatus().reason }, 'EMAIL not configured')
     return { delivered: false, transport: 'log' }
   }
   const payload = {
@@ -65,20 +68,24 @@ export async function sendEmail({ to, subject, html, text, from = null, replyTo 
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(TIMEOUT_MS()),
     })
     const bodyTxt = await res.text().catch(() => '')
     if (!res.ok) {
-      logger.warn({ to, subject, status: res.status, body: bodyTxt.slice(0, 200) }, 'mailer: resend refused send')
+      logger.warn({ to, status: res.status }, 'mailer: resend refused send')
       return { delivered: false, transport: 'send-failed', status: res.status, body: bodyTxt.slice(0, 200) }
     }
     let id = null
     try { id = JSON.parse(bodyTxt)?.id || null } catch { /* ok */ }
     return { delivered: true, transport: 'resend', id }
   } catch (err) {
-    logger.warn({ to, subject, err: err.message }, 'mailer: resend threw')
+    logger.warn({ to, err: err.message }, 'mailer: resend threw')
     return { delivered: false, transport: 'send-failed', reason: err.message }
   }
 }

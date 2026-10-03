@@ -19,9 +19,10 @@
  *   NIGHTWATCH_02_ENABLED   '0' disables the scheduler (default enabled)
  */
 import { logger } from './lib/log.mjs'
-import { runDailyPipeline, loadBriefByDate, briefDateKey } from './nightwatch02.mjs'
+import { runDailyPipeline, loadBriefByDate, briefDateKey, hasPendingSubscribers } from './nightwatch02.mjs'
+import { mailerStatus } from './lib/mailer.mjs'
 
-const MAX_TIMEOUT_MS = 6 * 60 * 60 * 1000 // reschedule every 6h at worst
+const MAX_TIMEOUT_MS = 30 * 60 * 1000 // retry unsent briefs while today's window is open
 
 function config() {
   const hour = clamp(Number(process.env.NIGHTWATCH_02_HOUR ?? 2), 0, 23)
@@ -40,12 +41,12 @@ export function nextFireAt(now = new Date(), hour = 2, minute = 0) {
   return next
 }
 
-/** true when we should catch up: today's fire has passed AND no brief for today exists. */
+/** True after today's fire if generation or configured email delivery is pending. */
 export function shouldCatchUp(now = new Date(), hour = 2, minute = 0) {
   const todayFire = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0))
   if (now.getTime() < todayFire.getTime()) return false
   const key = briefDateKey(now)
-  return !loadBriefByDate(key)
+  return !loadBriefByDate(key) || (mailerStatus().canDeliver && hasPendingSubscribers(key))
 }
 
 class Scheduler {
@@ -65,10 +66,9 @@ class Scheduler {
       return
     }
     this.hour = cfg.hour; this.minute = cfg.minute
-    // Catch-up: if we boot after today's 02:00 and there's no brief for today,
-    // generate one now so users landing on the page see today's brief.
+    // Catch up generation and any delivery that failed before a restart.
     if (shouldCatchUp(new Date(), this.hour, this.minute)) {
-      logger.info({ date: briefDateKey() }, 'Alpha of the Day catch-up: brief missing for today, generating now')
+      logger.info({ date: briefDateKey() }, 'Alpha of the Day catch-up: checking brief and pending delivery')
       this._runOnce().catch(err => logger.error({ err: err.message }, 'catch-up failed'))
     }
     this._schedule()
@@ -83,9 +83,10 @@ class Scheduler {
     this.timer.unref?.()
   }
   async _tick() {
-    // If the delay was capped (>6h to fire), just reschedule.
-    if (Date.now() < (this.nextAt?.getTime() ?? 0)) { this._schedule(); return }
-    await this._runOnce()
+    // The capped timer also retries recipients missed after the daily fire.
+    if (Date.now() >= (this.nextAt?.getTime() ?? 0) || shouldCatchUp(new Date(), this.hour, this.minute)) {
+      await this._runOnce()
+    }
     this._schedule()
   }
   async _runOnce() {

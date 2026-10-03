@@ -125,7 +125,7 @@ export function Nightwatch02Page({ user, onAsk }) {
               <span className="val">{fmtRelative(status.scheduler.lastRun.at)}</span>
             </div>
           )}
-          {user && (
+          {user && status?.manualRunAllowed && (
             <button className="btn ghost sm" onClick={runNow} disabled={running}>
               <RefreshCw size={11} /> {running ? 'Generating…' : 'Run now'}
             </button>
@@ -164,15 +164,18 @@ export function Nightwatch02Page({ user, onAsk }) {
 
 function SubscriptionToggle({ user, status }) {
   const [sub, setSub] = useState(null)
+  const [loadingSub, setLoadingSub] = useState(true)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState(null)
   const token = getToken()
-  const mailerReady = status?.mailer?.canDeliver
+  const mailerReady = sub?.mailerReady ?? status?.mailer?.canDeliver
 
   useEffect(() => {
     if (!user || !token || !hasApi()) return
+    setLoadingSub(true)
     apiJson('/nightwatch/subscription', { headers: { Authorization: `Bearer ${token}` } })
-      .then(setSub).catch(() => setSub(null))
+      .then(setSub).catch(e => setNote(`Could not load subscription: ${e.message}`))
+      .finally(() => setLoadingSub(false))
   }, [user, token])
 
   if (!user) {
@@ -206,14 +209,14 @@ function SubscriptionToggle({ user, status }) {
         <div className="nw02-sub-title">Send me the Alpha of the Day report every day</div>
         <div className="nw02-sub-detail">
           {sub?.enabled
-            ? 'Delivering to your email at 02:00 UTC. Unsubscribe anytime from the email footer or right here.'
+            ? (mailerReady === true ? 'Delivering to your email at 02:00 UTC. Unsubscribe anytime from the email footer or right here.' : mailerReady === false ? 'Subscription is on, but email delivery needs server configuration.' : 'Subscription is on; email delivery status is temporarily unavailable.')
             : 'We\'ll send the daily brief to your registered email once you enable it.'}
-          {!mailerReady && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
+          {mailerReady === false && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
         </div>
         {note && <div className="nw02-sub-note">{note}</div>}
       </div>
-      <button className={`btn ${sub?.enabled ? '' : 'primary'} sm`} onClick={toggle} disabled={busy}>
-        {busy ? 'Saving…' : sub?.enabled ? 'Turn off' : 'Turn on'}
+      <button className={`btn ${sub?.enabled ? '' : 'primary'} sm`} onClick={toggle} disabled={busy || loadingSub || !sub || !token}>
+        {busy ? 'Saving…' : loadingSub ? 'Loading…' : sub?.enabled ? 'Turn off' : 'Turn on'}
       </button>
     </div>
   )

@@ -21,6 +21,7 @@ process.env.NIGHTWATCH_02_ENABLED = '0'
 const nw02 = await import('./nightwatch02.mjs')
 const sched = await import('./nightwatch02-scheduler.mjs')
 const subs = await import('./nightwatch02-subscriptions.mjs')
+const { mailerStatus } = await import('./lib/mailer.mjs')
 
 test.after(() => { try { fs.rmSync(process.env.NIGHTWATCH_DATA_DIR, { recursive: true, force: true }) } catch { /* ignore */ } })
 
@@ -162,6 +163,90 @@ test('listActiveSubscribers excludes opted-out rows', () => {
   const active = subs.listActiveSubscribers().map(s => s.email)
   assert.ok(active.includes('carol@example.com'))
   assert.ok(!active.includes('dave@example.com'))
+})
+
+function deliveryBrief(date) {
+  return {
+    id: `nw02-${date}`, date,
+    marketSummary: { equityAvgChange24h: 0, breadth: 0, sectors: [] },
+    unusualMovements: [], alphaCandidates: [],
+    disclaimer: 'Research only; not investment advice.',
+  }
+}
+
+test('mailer needs a key and a verified-domain sender setting', () => {
+  const previousKey = process.env.RESEND_API_KEY
+  const previousFrom = process.env.EMAIL_FROM
+  try {
+    process.env.RESEND_API_KEY = 're_test_key'
+    delete process.env.EMAIL_FROM
+    assert.equal(mailerStatus().canDeliver, false)
+    process.env.EMAIL_FROM = 'NIGHTWATCH AI <onboarding@resend.dev>'
+    assert.equal(mailerStatus().canDeliver, false)
+    process.env.EMAIL_FROM = 'NIGHTWATCH AI <alpha@example.com>'
+    assert.equal(mailerStatus().canDeliver, true)
+  } finally {
+    if (previousKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = previousKey
+    if (previousFrom === undefined) delete process.env.EMAIL_FROM
+    else process.env.EMAIL_FROM = previousFrom
+  }
+})
+
+test('daily delivery records success, retries failure, and never repeats an accepted email', async () => {
+  for (const s of subs.listActiveSubscribers()) subs.setSubscription({ email: s.email, enabled: false })
+  subs.setSubscription({ email: 'daily@example.com', enabled: true })
+  const brief = deliveryBrief('2030-06-18')
+  fs.mkdirSync(nw02._paths.BRIEFS_DIR, { recursive: true })
+  fs.writeFileSync(path.join(nw02._paths.BRIEFS_DIR, `${brief.date}.json`), JSON.stringify(brief))
+  const previousKey = process.env.RESEND_API_KEY
+  const previousFrom = process.env.EMAIL_FROM
+  process.env.RESEND_API_KEY = 're_test_key'
+  process.env.EMAIL_FROM = 'Alpha <alpha@example.com>'
+  try {
+  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T04:00:00Z')), true, 'existing brief still needs delivery')
+  let attempts = 0
+  const keys = []
+  const send = async ({ idempotencyKey }) => {
+    assert.match(idempotencyKey, /^nightwatch02\/2030-06-(18|19)\/[a-f0-9]{64}$/)
+    keys.push(idempotencyKey)
+    return { delivered: ++attempts > 1, id: 'message-1' }
+  }
+  assert.equal(nw02.hasPendingSubscribers(brief.date), true)
+  assert.equal((await nw02.emailSubscribers(brief, send)).failed, 1)
+  assert.equal(nw02.hasPendingSubscribers(brief.date), true)
+  assert.equal((await nw02.emailSubscribers(brief, send)).delivered, 1)
+  assert.equal(nw02.hasPendingSubscribers(brief.date), false)
+  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T04:00:00Z')), false)
+  assert.equal((await nw02.emailSubscribers(brief, send)).skipped, 1)
+  assert.equal(attempts, 2)
+  subs.setSubscription({ email: 'daily@example.com', enabled: false })
+  assert.equal(nw02.hasPendingSubscribers('2030-06-19'), false)
+  assert.equal((await nw02.emailSubscribers(deliveryBrief('2030-06-19'), send)).total, 0)
+  subs.setSubscription({ email: 'daily@example.com', enabled: true })
+  assert.equal(nw02.hasPendingSubscribers('2030-06-19'), true)
+  assert.equal((await nw02.emailSubscribers(deliveryBrief('2030-06-19'), send)).delivered, 1)
+  assert.notEqual(keys[0], keys[2], 'the next day must use a fresh idempotency key')
+  } finally {
+    if (previousKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = previousKey
+    if (previousFrom === undefined) delete process.env.EMAIL_FROM
+    else process.env.EMAIL_FROM = previousFrom
+  }
+})
+
+test('turning off during a send prevents later queued delivery', async () => {
+  for (const s of subs.listActiveSubscribers()) subs.setSubscription({ email: s.email, enabled: false })
+  subs.setSubscription({ email: 'first@example.com', enabled: true })
+  subs.setSubscription({ email: 'second@example.com', enabled: true })
+  const sent = []
+  const result = await nw02.emailSubscribers(deliveryBrief('2030-06-20'), async ({ to }) => {
+    sent.push(to)
+    subs.setSubscription({ email: 'second@example.com', enabled: false })
+    return { delivered: true }
+  })
+  assert.deepEqual(sent, ['first@example.com'])
+  assert.equal(result.skipped, 1)
 })
 
 /* -------------------------------------------------- email rendering */

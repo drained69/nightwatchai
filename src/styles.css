@@ -729,6 +729,71 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   .page-head h1 { font-size: 26px }
 }
 
+/* Phone-first refinements: preserve dense market data while keeping the page
+   itself within the viewport and making primary controls easy to tap. */
+@media (max-width: 600px) {
+  html, body, #root { min-width: 0; width: 100%; }
+  body { overflow-x: clip; }
+  .app-shell {
+    margin: 0; min-height: 100dvh; border: 0; outline: 0;
+  }
+  .app-shell::before, .app-shell::after { display: none; }
+  .main { width: 100%; min-width: 0; }
+  .topbar {
+    top: 0; height: 54px; min-height: 54px;
+    padding: 0 max(12px, env(safe-area-inset-left)) 0 max(12px, env(safe-area-inset-right));
+    gap: 8px;
+  }
+  .menu-btn, .mobile-close, .icon-btn { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+  .crumbs { min-width: 0; gap: 5px; font-size: 9px; letter-spacing: .5px; white-space: nowrap; }
+  .crumbs span { display: none; }
+  .topbar-right { gap: 8px; }
+  .sidebar {
+    left: 0; width: min(88vw, 320px); height: 100dvh; padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+    transform: translateX(-105%); transition: transform .22s ease; overflow-y: auto; overscroll-behavior: contain;
+  }
+  .sidebar.open { left: 0; transform: translateX(0); }
+  .nav-item { min-height: 44px; font-size: 14px; }
+  .page { padding: 18px 14px calc(32px + env(safe-area-inset-bottom)); gap: 16px; }
+  .page-head { width: 100%; }
+  .page-head-actions, .page-head-actions > * { max-width: 100%; }
+  .page-head-actions { flex-wrap: wrap; }
+  .hero { padding: 20px 16px 16px; gap: 14px; }
+  .hero-line h1 { font-size: clamp(27px, 8vw, 34px); }
+  .hero-line p { font-size: 13px; }
+  .commandbar { flex-wrap: wrap; padding: 8px; }
+  .commandbar input { flex-basis: calc(100% - 48px); font-size: 16px; }
+  .commandbar .btn { min-height: 42px; flex: 1; }
+  .panel-head { padding: 12px 14px; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  .panel-head h3 { font-size: 18px; }
+  .empty-body, .settings-body, .review-body { padding-left: 14px; padding-right: 14px; }
+  .settings-grid { padding: 14px; }
+  .settings-grid input, .settings-grid select, input, select, textarea { font-size: 16px; }
+  .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-strip > div { min-width: 0; padding: 12px; }
+  .stat-strip b { font-size: 15px; overflow-wrap: anywhere; }
+  .skill-rail { grid-template-columns: 1fr 1fr; }
+  .edge-grid, .suggest-grid, .impact-grid { grid-template-columns: 1fr 1fr; }
+  .playbook-grid { grid-template-columns: minmax(0, 1fr); }
+  .scanner, .opp-table, .pos-table, .mini-table, .stress-table, .venue-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .scan-head, .scan-row { padding-left: 14px; padding-right: 14px; }
+  .opp-head, .opp-row { min-width: 680px; padding-left: 14px; padding-right: 14px; }
+  .pos-head, .pos-row { min-width: 820px; padding-left: 14px; padding-right: 14px; }
+  .stress-head, .stress-row { min-width: 520px; }
+  .toast { bottom: calc(16px + env(safe-area-inset-bottom)); max-width: none; }
+  .confirm-dialog, .disclaimer-card, .panic-card { padding: 20px 16px; max-height: calc(100dvh - 32px); overflow-y: auto; }
+  .confirm-actions, .panic-actions { flex-wrap: wrap; }
+  .confirm-actions .btn, .panic-actions .btn { min-height: 42px; }
+  .disclaimer-footer { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 380px) {
+  .page { padding-left: 11px; padding-right: 11px; }
+  .chip { padding: 7px 9px; font-size: 9px; }
+  .stat-strip small { letter-spacing: .7px; }
+  .impact-grid > div { padding: 11px 10px; }
+}
+
 /* ============================================================= GetAgent-style pages */
 
 .playbook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px }
@@ -1620,3 +1685,112 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 .learn-count { font: 700 11px 'IBM Plex Mono', monospace; color: var(--accent-2); padding: 1px 6px; border: 1px solid rgba(165,35,42,0.3) }
 .learn-pattern small, .learn-analog small { display: block; color: var(--text-2); font-size: 11px; line-height: 1.5; margin-top: 3px }
 @media (max-width: 720px) { .learn-grid { grid-template-columns: 1fr } }
+
+/* Final mobile overrides follow every page-specific rule so later components
+   cannot restore desktop column widths on a phone. */
+@media (max-width: 600px) {
+  .scrim { border: 0; padding: 0; cursor: pointer; }
+  .auth-shell { display: flex; flex-direction: column; min-height: 100dvh; overflow: visible; }
+  .auth-shell .auth-hero { padding: 24px 18px 12px; gap: 10px; }
+  .auth-shell .auth-hero h1 { font-size: 30px; }
+  .auth-shell .auth-tagline { margin: 0; font-size: 11px; }
+  .auth-shell .auth-lead, .auth-shell .auth-perks, .auth-shell .auth-marquee { display: none; }
+  .auth-shell .auth-form { padding: 16px 18px 36px; gap: 12px; }
+  .auth-shell .auth-form .panel { max-width: none; padding: 18px !important; }
+  .auth-shell .auth-form input { font-size: 16px; min-height: 44px; }
+  .auth-shell .auth-form .btn.primary { min-height: 44px; }
+
+  .playbook-grid, .nw02-unusual { grid-template-columns: minmax(0, 1fr); }
+  .playbook-modal { padding: 18px 14px; max-height: calc(100dvh - 32px); }
+  .pb-conds, .analysis-grid, .news-impact-grid { grid-template-columns: minmax(0, 1fr); }
+  .assayer-chat { padding: 12px; }
+  .chat-msg.user p, .chat-msg.assistant p { max-width: 94%; overflow-wrap: anywhere; }
+  .analysis-header { padding: 14px; gap: 12px; }
+  .analysis-header .ah-left { gap: 10px; }
+  .analysis-header .ah-right { justify-content: flex-start; }
+  .venue-head, .venue-row { min-width: 560px; padding: 10px 14px; }
+  .action-card { padding: 14px; }
+  .action-plan { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .action-plan-metric { min-width: 0; }
+  .action-plan-metric b { overflow-wrap: anywhere; }
+  .action-plan-metric:nth-child(3n) { border-right: 1px solid var(--line-soft); }
+  .action-plan-metric:nth-child(2n) { border-right: 0; }
+  .action-buttons .btn { min-height: 44px; justify-content: center; }
+  .report-head, .suggest-head { flex-direction: column; }
+  .report-head { padding: 16px 14px; gap: 10px; }
+  .report-badges { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+  .report-summary, .suggest { padding: 14px; }
+  .sec { padding: 14px; min-width: 0; }
+  .citations { padding: 10px 14px; }
+  .metric { min-width: 0; padding: 10px; }
+  .metric b { font-size: 13px; overflow-wrap: anywhere; }
+  .empty-report { padding: 28px 16px; }
+  .kv, .kv-row { gap: 10px; align-items: flex-start; }
+  .kv b, .kv-row b { min-width: 0; overflow-wrap: anywhere; text-align: right; }
+  .settings-body code, .steps code { overflow-wrap: anywhere; }
+  .my-pb-section { padding-left: 14px; padding-right: 14px; }
+  .my-pb-actions { flex-wrap: wrap; }
+  .nw02-page { padding: 0 14px calc(32px + env(safe-area-inset-bottom)); }
+  .nw02-header { padding: 18px 0; }
+  .nw02-title h1 { font-size: 30px; }
+  .nw02-meta-row { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+  .nw02-meta-row .val { overflow-wrap: anywhere; }
+  .nw02-subscribe, .nw02-sectors, .nw02-candidate { padding: 14px; }
+  .nw02-tile { min-width: 0; padding: 12px; }
+  .nw02-tile-value { font-size: 15px; overflow-wrap: anywhere; }
+  .nw02-sector-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; }
+  .nw02-sector-leaders { grid-column: 1 / -1; }
+  .nw02-cand-actions { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .nw02-cand-actions .btn { min-height: 44px; }
+  .news-headline { font-size: 18px; }
+  .news-foot { flex-wrap: wrap; gap: 10px; }
+  .ni-cta { flex-wrap: wrap; }
+  .regime-note { flex-wrap: wrap; }
+  .mini-head, .mini-row { min-width: 460px; }
+  .filter-row { flex-wrap: wrap; }
+}
+
+@media (max-width: 380px) {
+  .skill-rail { grid-template-columns: minmax(0, 1fr); }
+  .skill { min-width: 0; }
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings-grid label { min-width: 0; }
+  .settings-grid input, .settings-grid select { width: 100%; min-width: 0; }
+}
+
+/* Keep the first-use notice usable when the browser chrome reduces iPhone height. */
+.disclaimer-modal {
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+.disclaimer-card {
+  width: min(100%, 600px);
+  max-height: calc(100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom)));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  overflow: hidden;
+}
+.dc-head { min-width: 0; gap: 12px; }
+.dc-head b { min-width: 0; }
+.dc-head .icon-btn { flex: 0 0 44px; min-height: 44px; }
+.disclaimer-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  padding: 18px 4px 18px 0;
+  scrollbar-gutter: stable;
+}
+.disclaimer-scroll:focus-visible { outline: 2px solid var(--up); outline-offset: -2px; }
+.disclaimer-actions { position: relative; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.disclaimer-actions .btn { width: 100%; min-height: 44px; justify-content: center; }
+
+@media (max-width: 600px) {
+  .disclaimer-card { padding: 18px 16px; }
+  .dc-head b { font-size: 22px; line-height: 1.15; }
+  .disclaimer-card ul { font: 400 14px/1.5 'DM Sans', system-ui, sans-serif; gap: 14px; }
+  .disclaimer-card li { padding-right: 2px; }
+  .disclaimer-scroll { padding-top: 14px; padding-bottom: 14px; }
+}

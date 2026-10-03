@@ -24,12 +24,13 @@ import { paths } from './lib/store.mjs'
 import { logger } from './lib/log.mjs'
 import { buildLiveContext, buildLiveUniverse, getMacro } from './market-context.mjs'
 import { LocalNightwatchEngine, inferAsset, stressTestThesis, fmtPct } from '../src/domain.js'
-import { sendBatch } from './lib/mailer.mjs'
-import { listActiveSubscribers } from './nightwatch02-subscriptions.mjs'
+import { sendEmail } from './lib/mailer.mjs'
+import { getSubscription, listActiveSubscribers } from './nightwatch02-subscriptions.mjs'
 
 const DIR = path.join(paths.DATA_DIR, 'nightwatch02')
 const LATEST_FILE = path.join(DIR, 'latest.json')
 const BRIEFS_DIR  = path.join(DIR, 'briefs')
+const DELIVERIES_DIR = path.join(DIR, 'deliveries')
 
 function ensureDirs() { fs.mkdirSync(BRIEFS_DIR, { recursive: true }) }
 function atomicWrite(f, obj) {
@@ -451,28 +452,46 @@ export function renderBriefEmailText(brief) {
 
 /* -------------------------------------------------- delivery */
 
-export async function emailSubscribers(brief) {
+function deliveryFile(date) { return path.join(DELIVERIES_DIR, `${date}.json`) }
+function deliveredFor(date) { return safeReadJson(deliveryFile(date), {}) }
+
+export function hasPendingSubscribers(date) {
+  const delivered = deliveredFor(date)
+  return listActiveSubscribers().some(s => !delivered[s.email])
+}
+
+export async function emailSubscribers(brief, send = sendEmail) {
   const subs = listActiveSubscribers()
-  if (!subs.length) return { total: 0, delivered: 0, failed: 0, results: [] }
+  if (!subs.length) return { total: 0, delivered: 0, failed: 0, skipped: 0, results: [] }
   // Render per-subscriber so each email carries its own unsubscribe token.
   const results = []
-  let delivered = 0, failed = 0
+  let delivered = 0, failed = 0, skipped = 0
+  const receipt = deliveredFor(brief.date)
   for (const s of subs) {
+    // Re-read immediately before sending: a user can turn the toggle off
+    // while an earlier recipient is being processed.
+    if (!getSubscription(s.email)?.enabled || receipt[s.email]) {
+      skipped++
+      continue
+    }
     const html = renderBriefEmailHtml(brief, s)
     const text = renderBriefEmailText(brief)
-    // sendBatch expects same-html for all; do it one at a time to preserve token.
     // eslint-disable-next-line no-await-in-loop
-    const { results: r } = await sendBatch({
-      recipients: [s.email],
+    const result = await send({
+      to: s.email,
       subject: `Alpha of the Day · ${brief.date}`,
       html, text,
+      idempotencyKey: `nightwatch02/${brief.date}/${crypto.createHash('sha256').update(s.email).digest('hex')}`,
     })
-    results.push(...r)
-    delivered += r.filter(x => x.delivered).length
-    failed    += r.filter(x => !x.delivered).length
+    results.push({ to: s.email, ...result })
+    if (result.delivered) {
+      receipt[s.email] = { at: new Date().toISOString(), id: result.id || null }
+      atomicWrite(deliveryFile(brief.date), receipt)
+      delivered++
+    } else failed++
   }
-  logger.info({ brief: brief.id, subs: subs.length, delivered, failed }, 'alpha-of-the-day emails dispatched')
-  return { total: subs.length, delivered, failed, results }
+  logger.info({ brief: brief.id, subs: subs.length, delivered, failed, skipped }, 'alpha-of-the-day emails dispatched')
+  return { total: subs.length, delivered, failed, skipped, results }
 }
 
 /**
@@ -480,7 +499,7 @@ export async function emailSubscribers(brief) {
  * back the brief — the brief stays on disk and the UI serves it either way.
  */
 export async function runDailyPipeline({ newsStore, engine, now = new Date() } = {}) {
-  const brief = await generateBrief({ newsStore, engine, now })
+  const brief = loadBriefByDate(briefDateKey(now)) || await generateBrief({ newsStore, engine, now })
   let email = { total: 0, delivered: 0, failed: 0, results: [] }
   try { email = await emailSubscribers(brief) } catch (err) { logger.warn({ err: err.message }, 'nightwatch02 email failed') }
   return { brief, email }

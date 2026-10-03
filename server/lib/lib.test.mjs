@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 /* ---------- JWT ---------- */
 
 import { sign, verify } from './jwt.mjs'
+import { requestSignInCode } from './auth.mjs'
 
 test('jwt: sign then verify round-trip', () => {
   const secret = 'test-secret-do-not-use-in-production'
@@ -29,6 +30,21 @@ test('jwt: verify rejects malformed token', () => {
 test('jwt: verify rejects expired token', () => {
   const t = sign({ sub: 'x' }, 's', { expSeconds: -1 })
   assert.equal(verify(t, 's'), null)
+})
+
+test('production refuses to claim a sign-in email was sent without delivery settings', async () => {
+  const old = { nodeEnv: process.env.NODE_ENV, key: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM }
+  try {
+    process.env.NODE_ENV = 'production'
+    delete process.env.RESEND_API_KEY
+    delete process.env.EMAIL_FROM
+    await assert.rejects(requestSignInCode({ email: 'missing-mailer@example.com' }), /could not send a sign-in code/i)
+  } finally {
+    for (const [name, value] of [['NODE_ENV', old.nodeEnv], ['RESEND_API_KEY', old.key], ['EMAIL_FROM', old.from]]) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })
 
 /* ---------- Rate limiter ---------- */

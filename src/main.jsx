@@ -119,6 +119,17 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const provider = useRef(new NightwatchProvider()).current
 
   useEffect(() => { sessionRef.current = session }, [session])
+  useEffect(() => {
+    if (!mobileNav) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const closeOnEscape = event => { if (event.key === 'Escape') setMobileNav(false) }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [mobileNav])
   useEffect(() => { saveSession(session, authUser?.id || null) }, [session, authUser?.id])
 
   // Personal session hydrate: on sign-in, pull this user's server-side
@@ -636,7 +647,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
 
   return (
     <div className="app-shell">
-      <aside className={mobileNav ? 'sidebar open' : 'sidebar'}>
+      <aside className={mobileNav ? 'sidebar open' : 'sidebar'} id="mobile-navigation">
         <div className="brand">
           <img className="brand-mark" src="/logo.svg" alt="NIGHTWATCH AI" width="36" height="36" />
           <div className="brand-name">
@@ -703,11 +714,11 @@ function App({ authUser: signedInUser, onSignedOut }) {
         </div>
       </aside>
 
-      {mobileNav && <div className="scrim" onClick={() => setMobileNav(false)} />}
+      {mobileNav && <button type="button" className="scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation" />}
 
       <main className="main">
         <header className="topbar">
-          <button className="icon-btn menu-btn" onClick={() => setMobileNav(true)}><Menu size={17} /></button>
+          <button type="button" className="icon-btn menu-btn" onClick={() => setMobileNav(true)} aria-label="Open navigation" aria-expanded={mobileNav} aria-controls="mobile-navigation"><Menu size={17} /></button>
           <div className="crumbs">
             <span>NIGHTWATCH AI</span><ChevronRight size={13} /><b>{(NAV.find(n => n.id === page) || NAV[0]).label.toUpperCase()}</b>
           </div>

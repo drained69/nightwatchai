@@ -14,7 +14,7 @@ import { promisify } from 'node:util'
 import { sign, verify } from './jwt.mjs'
 import { createUser, getUser, findUserByEmail, upsertUser } from './store.mjs'
 import { logger } from './log.mjs'
-import { sendEmail } from './mailer.mjs'
+import { sendEmail, mailerStatus } from './mailer.mjs'
 
 const scrypt = promisify(crypto.scrypt)
 const SCRYPT_N = 16384, SCRYPT_R = 8, SCRYPT_P = 1, SCRYPT_KEYLEN = 64
@@ -139,9 +139,9 @@ export async function requestSignInCode({ email }) {
 
   const delivery = await sendSignInCode(norm, code)
   const isProd = process.env.NODE_ENV === 'production'
-  const resendConfigured = Boolean(process.env.RESEND_API_KEY)
+  const resendConfigured = mailerStatus().canDeliver
 
-  if (delivery.transport === 'send-failed') {
+  if (delivery.transport === 'send-failed' || (isProd && delivery.transport !== 'resend')) {
     // Resend was configured but refused (unverified domain, bounce, etc.).
     // Refuse the request rather than leak the code on the client.
     PENDING_CODES.delete(norm)
@@ -206,11 +206,7 @@ async function sendSignInCode(email, code) {
   </div>
 </body></html>`.trim()
   const r = await sendEmail({ to: email, subject, html })
-  if (r.transport === 'send-failed') {
-    // Log the code for the operator to recover from server logs (never
-    // returned to the client — requestSignInCode enforces that).
-    logger.info({ email, code }, 'SIGN-IN CODE (server-only recovery log)')
-  } else if (r.transport === 'log') {
+  if (r.transport === 'log' && process.env.NODE_ENV !== 'production') {
     logger.info({ email, code }, 'SIGN-IN CODE (no email provider — set RESEND_API_KEY to send real email)')
   }
   return { transport: r.transport, status: r.status }

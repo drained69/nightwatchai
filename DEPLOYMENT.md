@@ -69,7 +69,7 @@ Copy `.env.example` to `.env` and fill:
 | `BITGET_OAUTH_REDIRECT_URI` | ↑ | ↑ | Your production URL + `/auth/oauth/bitget/callback` |
 | `BITGET_LIVE_ENABLED` | Set to `1` to actually enable order routing (in addition to the OAuth vars above) | Live UTA v3 order routing | — |
 | `RESEND_API_KEY` | Email OTP sign-in + Alpha of the Day delivery | Email | https://resend.com |
-| `EMAIL_FROM` | Domain-verified sender address | Production email | Resend dashboard |
+| `EMAIL_FROM` | Sender on a domain verified in Resend; required with the API key | Production email | Resend dashboard |
 | `APP_URL` | Absolute URL used in email links | Recommended for email | Your production URL |
 | `CORS_ORIGIN` | Restrict browser access | Production | Your SPA origin, e.g. `https://nightwatch.example.com` |
 | `NIGHTWATCH_DATA_DIR` | Where per-user JSON files land | Persistence | Default `./data`; mount a volume in prod |
@@ -209,7 +209,7 @@ The Docker image works anywhere. This hackathon's live deployment (https://night
 railway up
 ```
 
-Point Railway at the repo, add the secrets from §2 in the Railway dashboard, add a volume mount at `/data`, then attach your custom domain under the service's Settings → Domains. ~$5/mo. Bitget's WAF blocks some shared datacenter IP ranges — if you see 403s on Bitget REST calls from your Railway deployment, route through the Cloudflare Worker relay in `relay/` (`BITGET_BASE_URL` + `BITGET_RELAY_KEY`).
+Point Railway at the repo, set `RESEND_API_KEY`, a verified-domain `EMAIL_FROM`, and `APP_URL=https://nightwatchai.watch` in the Railway service variables, add a volume mount at `/data`, then attach your custom domain under the service's Settings → Domains. The local `.env` is not copied into the image. After redeployment, check `/nightwatch/status` for `mailer.canDeliver: true` and run an opt-in delivery check. Bitget's WAF blocks some shared datacenter IP ranges — if you see 403s on Bitget REST calls from your Railway deployment, route through the Cloudflare Worker relay in `relay/` (`BITGET_BASE_URL` + `BITGET_RELAY_KEY`).
 
 ### Fly.io 🔴 (untested alternative)
 

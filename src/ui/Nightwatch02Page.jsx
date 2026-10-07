@@ -10,7 +10,7 @@
  *      button that pre-fills a research question.
  *   5. Email subscription toggle (auth-gated).
  *
- * The page is read-only: reports are generated on the server at 02:00 UTC
+ * The page is read-only: reports are generated on the server at the scheduled time (07:00 UTC default)
  * and by the /nightwatch/run admin endpoint. Client just renders.
  */
 import React, { useEffect, useState } from 'react'
@@ -61,6 +61,14 @@ function fmtRelative(iso) {
   return `${Math.round(h / 24)}d ago`
 }
 
+/** The server's configured send time, e.g. "07:00 UTC" — never hard-coded in copy. */
+function sendTimeOf(status) {
+  const s = status?.scheduler
+  if (s?.sendTime) return s.sendTime
+  if (Number.isFinite(s?.hourUtc)) return `${String(s.hourUtc).padStart(2, '0')}:${String(s.minuteUtc ?? 0).padStart(2, '0')} UTC`
+  return '07:00 UTC'
+}
+
 export function Nightwatch02Page({ user, onAsk }) {
   const [brief, setBrief] = useState(null)
   const [status, setStatus] = useState(null)
@@ -103,7 +111,7 @@ export function Nightwatch02Page({ user, onAsk }) {
           <p className="nw02-sub">
             Daily AI-generated research brief covering tokenized U.S. equities on Bitget.
             Sector analysis, unusual price movements, and alpha candidates — each with a short and
-            long-term thesis, risk factors, and invalidation levels. Published at 02:00 UTC.
+            long-term thesis, risk factors, and invalidation levels. Published daily at {sendTimeOf(status)}.
           </p>
         </div>
         <div className="nw02-meta">
@@ -142,8 +150,8 @@ export function Nightwatch02Page({ user, onAsk }) {
           <Sparkles size={28} style={{ marginBottom: 12, opacity: 0.4 }} />
           <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 15 }}>No brief yet</p>
           <p style={{ margin: 0, color: 'var(--text-2)', fontSize: 13 }}>
-            The first Alpha of the Day brief will be generated at 02:00 UTC.{' '}
-            {user ? 'Hit "Run now" above to generate one right away.' : 'Sign in to trigger a manual run.'}
+            The first Alpha of the Day brief will be generated at {sendTimeOf(status)}.
+            {user && status?.manualRunAllowed ? ' Hit "Run now" above to generate one right away.' : ''}
           </p>
         </div>
       )}
@@ -152,7 +160,7 @@ export function Nightwatch02Page({ user, onAsk }) {
         <>
           <MarketSummary brief={brief} />
           <UnusualMovements items={(brief.unusualMovements || []).filter(isTokenizedStock)} />
-          <AlphaCandidates candidates={(brief.alphaCandidates || []).filter(isTokenizedStock)} onAsk={onAsk} />
+          <AlphaCandidates candidates={(brief.alphaCandidates || []).filter(isTokenizedStock)} onAsk={onAsk} sendTime={sendTimeOf(status)} />
           <Disclaimer />
         </>
       )}
@@ -164,19 +172,22 @@ export function Nightwatch02Page({ user, onAsk }) {
 
 function SubscriptionToggle({ user, status }) {
   const [sub, setSub] = useState(null)
-  const [loadingSub, setLoadingSub] = useState(true)
+  const [loadingSub, setLoadingSub] = useState(false)
+  const [loadError, setLoadError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState(null)
   const token = getToken()
   const mailerReady = sub?.mailerReady ?? status?.mailer?.canDeliver
+  const sendTime = sub?.sendTime || sendTimeOf(status)
 
-  useEffect(() => {
+  const loadSub = () => {
     if (!user || !token || !hasApi()) return
-    setLoadingSub(true)
+    setLoadingSub(true); setLoadError(null)
     apiJson('/nightwatch/subscription', { headers: { Authorization: `Bearer ${token}` } })
-      .then(setSub).catch(e => setNote(`Could not load subscription: ${e.message}`))
+      .then(setSub).catch(e => setLoadError(e.message))
       .finally(() => setLoadingSub(false))
-  }, [user, token])
+  }
+  useEffect(loadSub, [user, token])
 
   if (!user) {
     return (
@@ -196,9 +207,11 @@ function SubscriptionToggle({ user, status }) {
         body: JSON.stringify({ email: user.email, enabled }),
       })
       setSub(r)
-      setNote(enabled
-        ? (r.mailerReady ? 'Daily brief enabled — you\'ll receive it at 02:00 UTC.' : 'Preference saved — email delivery is not configured on this server yet.')
-        : 'Daily emails turned off.')
+      const when = r.sendTime || sendTime
+      setNote(!enabled ? 'Daily emails turned off — nothing further will be sent.'
+        : !r.mailerReady ? 'Preference saved — email delivery is not configured on this server yet.'
+        : r.deliveringToday ? `Today's brief is on its way to ${r.email}. After that, every day at ${when}.`
+        : `Daily brief enabled — the next one arrives at ${when}.`)
     } catch (e) { setNote(`Could not save: ${e.message}`) } finally { setBusy(false) }
   }
 
@@ -206,17 +219,19 @@ function SubscriptionToggle({ user, status }) {
     <div className={`nw02-subscribe ${sub?.enabled ? 'on' : 'off'}`}>
       <Mail size={14} />
       <div className="nw02-sub-body">
-        <div className="nw02-sub-title">Send me the Alpha of the Day report every day</div>
+        <div className="nw02-sub-title">Send me the Alpha of the Day report every day at {sendTime}</div>
         <div className="nw02-sub-detail">
-          {sub?.enabled
-            ? (mailerReady === true ? 'Delivering to your email at 02:00 UTC. Unsubscribe anytime from the email footer or right here.' : mailerReady === false ? 'Subscription is on, but email delivery needs server configuration.' : 'Subscription is on; email delivery status is temporarily unavailable.')
-            : 'We\'ll send the daily brief to your registered email once you enable it.'}
+          {loadError
+            ? <>Could not load your email preference ({loadError}). <button type="button" className="btn ghost sm" onClick={loadSub}>Retry</button></>
+            : sub?.enabled
+              ? (mailerReady === true ? `Delivering to ${sub.email} daily at ${sendTime}. Unsubscribe anytime from the email footer or right here.` : mailerReady === false ? 'Subscription is on, but email delivery needs server configuration.' : 'Subscription is on; email delivery status is temporarily unavailable.')
+              : 'We\'ll send the daily brief to your registered email once you enable it.'}
           {mailerReady === false && <span className="nw02-warn"><ShieldAlert size={11} /> Email delivery is not configured on this server yet.</span>}
         </div>
-        {note && <div className="nw02-sub-note">{note}</div>}
+        {note && <div className="nw02-sub-note" role="status">{note}</div>}
       </div>
-      <button className={`btn ${sub?.enabled ? '' : 'primary'} sm`} onClick={toggle} disabled={busy || loadingSub || !sub || !token}>
-        {busy ? 'Saving…' : loadingSub ? 'Loading…' : sub?.enabled ? 'Turn off' : 'Turn on'}
+      <button className={`btn ${sub?.enabled ? '' : 'primary'} sm`} onClick={toggle} disabled={busy || loadingSub || !sub || !token} aria-pressed={Boolean(sub?.enabled)}>
+        {busy ? 'Saving…' : loadingSub ? 'Loading…' : !sub ? 'Unavailable' : sub.enabled ? 'Turn off' : 'Turn on'}
       </button>
     </div>
   )
@@ -296,12 +311,12 @@ function UnusualMovements({ items }) {
 
 /* ---------------- alpha candidates ---------------- */
 
-function AlphaCandidates({ candidates, onAsk }) {
+function AlphaCandidates({ candidates, onAsk, sendTime = '07:00 UTC' }) {
   if (!candidates?.length) {
     return (
       <section className="panel nw02-panel">
         <div className="panel-head"><h3>Alpha candidates</h3><small>none qualified today</small></div>
-        <div className="empty-body">No tokenized stock cleared today's alpha scan. The next brief runs at 02:00 UTC tomorrow.</div>
+        <div className="empty-body">No tokenized stock cleared today's alpha scan. The next brief runs at {sendTime} tomorrow.</div>
       </section>
     )
   }

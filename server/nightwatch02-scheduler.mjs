@@ -1,10 +1,10 @@
 /**
  * Alpha of the Day daily scheduler.
  *
- * In-process, timezone-aware (default 02:00 UTC), with catch-up:
+ * In-process, UTC (default 07:00 UTC), with catch-up:
  *   1. On start, if today's brief file is missing AND today's fire time has
- *      already passed, generate immediately (a server that came up at 04:00
- *      UTC must not skip the 02:00 brief).
+ *      already passed, generate immediately (a server that came up at 09:00
+ *      UTC must not skip the 07:00 brief).
  *   2. Compute the next fire time (>= now) in the configured timezone.
  *   3. Sleep until that instant, run the pipeline, then reschedule.
  *
@@ -14,7 +14,7 @@
  * ~24.85-day timeout max.
  *
  * Env:
- *   NIGHTWATCH_02_HOUR      hour of day (0-23) in UTC (default 2)
+ *   NIGHTWATCH_02_HOUR      hour of day (0-23) in UTC (default 7)
  *   NIGHTWATCH_02_MINUTE    minute (0-59)          (default 0)
  *   NIGHTWATCH_02_ENABLED   '0' disables the scheduler (default enabled)
  */
@@ -24,25 +24,36 @@ import { mailerStatus } from './lib/mailer.mjs'
 
 const MAX_TIMEOUT_MS = 30 * 60 * 1000 // retry unsent briefs while today's window is open
 
-function config() {
-  const hour = clamp(Number(process.env.NIGHTWATCH_02_HOUR ?? 2), 0, 23)
-  const minute = clamp(Number(process.env.NIGHTWATCH_02_MINUTE ?? 0), 0, 59)
+/** Default send time. 07:00 UTC lands the brief before the European open and US pre-market. */
+export const DEFAULT_HOUR_UTC = 7
+
+/** The one source of truth for when the brief fires — UI and email copy read this. */
+export function scheduleConfig() {
+  const rawHour = process.env.NIGHTWATCH_02_HOUR
+  const rawMinute = process.env.NIGHTWATCH_02_MINUTE
+  const hour = clamp(rawHour == null || rawHour === '' ? DEFAULT_HOUR_UTC : Number(rawHour), 0, 23, DEFAULT_HOUR_UTC)
+  const minute = clamp(rawMinute == null || rawMinute === '' ? 0 : Number(rawMinute), 0, 59, 0)
   return { hour, minute, enabled: process.env.NIGHTWATCH_02_ENABLED !== '0' }
 }
-function clamp(n, lo, hi) { return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.floor(n))) : lo }
+/** "07:00 UTC" */
+export function scheduleLabel(cfg = scheduleConfig()) {
+  return `${String(cfg.hour).padStart(2, '0')}:${String(cfg.minute).padStart(2, '0')} UTC`
+}
+function config() { return scheduleConfig() }
+function clamp(n, lo, hi, dflt = lo) { return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.floor(n))) : dflt }
 
 /**
  * Compute the next fire time >= `now` in UTC.
  * Exported so tests can pin `now` and assert scheduling math.
  */
-export function nextFireAt(now = new Date(), hour = 2, minute = 0) {
+export function nextFireAt(now = new Date(), hour = scheduleConfig().hour, minute = scheduleConfig().minute) {
   const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0))
   if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1)
   return next
 }
 
 /** True after today's fire if generation or configured email delivery is pending. */
-export function shouldCatchUp(now = new Date(), hour = 2, minute = 0) {
+export function shouldCatchUp(now = new Date(), hour = scheduleConfig().hour, minute = scheduleConfig().minute) {
   const todayFire = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0))
   if (now.getTime() < todayFire.getTime()) return false
   const key = briefDateKey(now)
@@ -61,11 +72,11 @@ class Scheduler {
   start() {
     const cfg = config()
     this.enabled = cfg.enabled
+    this.hour = cfg.hour; this.minute = cfg.minute
     if (!cfg.enabled) {
       logger.info('Alpha of the Day scheduler disabled (NIGHTWATCH_02_ENABLED=0)')
       return
     }
-    this.hour = cfg.hour; this.minute = cfg.minute
     // Catch up generation and any delivery that failed before a restart.
     if (shouldCatchUp(new Date(), this.hour, this.minute)) {
       logger.info({ date: briefDateKey() }, 'Alpha of the Day catch-up: checking brief and pending delivery')
@@ -107,11 +118,24 @@ class Scheduler {
   }
   /** External trigger (dev/admin endpoint). Bypasses schedule; still de-dupes concurrent runs. */
   async runNow() { return this._runOnce() }
+  /**
+   * Someone just switched the email on. If today's brief has already gone
+   * out, send it to them now instead of waiting for the next 30-minute retry.
+   * Never generates or sends before today's fire time. Returns true when a
+   * delivery was started.
+   */
+  deliverTodayIfDue(now = new Date()) {
+    if (!this.enabled || !mailerStatus().canDeliver) return false
+    if (!shouldCatchUp(now, this.hour, this.minute)) return false
+    this._runOnce().catch(err => logger.error({ err: err.message }, 'opt-in delivery failed'))
+    return true
+  }
   status() {
     return {
       enabled: this.enabled,
       hourUtc: this.hour,
       minuteUtc: this.minute,
+      sendTime: scheduleLabel({ hour: this.hour ?? DEFAULT_HOUR_UTC, minute: this.minute ?? 0 }),
       nextFireAt: this.nextAt?.toISOString() || null,
       running: this.running,
       lastRun: this.lastRun,

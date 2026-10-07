@@ -1,7 +1,8 @@
 /**
  * Alpha of the Day — daily AI market intelligence brief (tokenized stocks only).
  *
- * Every day at 02:00 UTC we:
+ * Every day at the scheduled time (07:00 UTC by default — see
+ * nightwatch02-scheduler.mjs) we:
  *   1. Pull the live universe (buildLiveUniverse) and scope it to tokenized
  *      equities — crypto is explicitly out of scope for this brief.
  *   2. Grade every asset on composite/net-edge/volume/news attention.
@@ -200,8 +201,9 @@ async function buildCandidateCard(engine, row, ctx) {
       dataFreshness: report.dataFreshness,
     } : null,
     thesisTest: thesis ? {
-      verdict: thesis.verdict, resonance: thesis.resonance,
-      steelman: thesis.steelman, counter: thesis.counter,
+      verdict: thesis.verdict,
+      confidenceBefore: thesis.confidenceBefore, confidenceAfter: thesis.confidenceAfter,
+      steelman: thesis.steelman, counter: thesis.counterThesis,
       stressTests: thesis.stressTests,
     } : null,
     thesisCardQuestion: `Research ${row.symbol} — Alpha of the Day flagged this ${sectorOf(row)} stock. Generate a full thesis card.`,
@@ -214,7 +216,8 @@ function stressTestOne(report, ctx) {
     const thesis = `${report.signal.direction} ${report.symbol}: ${report.signal.reason}`
     const memory = ctx.memory || { preferences: {}, analogs: [] }
     const universe = ctx.universe
-    return Promise.resolve(stressTestThesis({ thesis, memory, universe, context: ctx }))
+    // Side passed explicitly — the reason text is engine prose, not a trader's phrasing.
+    return Promise.resolve(stressTestThesis({ thesis, memory, universe, context: ctx, direction: report.signal.direction }))
   } catch (err) { logger.warn({ err: err.message, symbol: report.symbol }, 'stress-test failed'); return Promise.resolve(null) }
 }
 
@@ -314,7 +317,23 @@ export function listBriefDates(limit = 30) {
 
 /* -------------------------------------------------- email rendering */
 
-const APP_URL = () => (process.env.APP_URL || 'http://localhost:8787').replace(/\/$/, '')
+/**
+ * Public base URL for links inside emails. APP_URL wins; otherwise Railway's
+ * RAILWAY_PUBLIC_DOMAIN (the attached custom domain). Without either, links
+ * pointed at localhost — every recipient's unsubscribe link was dead.
+ */
+export function appUrl() {
+  const explicit = process.env.APP_URL?.trim()
+  if (explicit) return explicit.replace(/\/$/, '')
+  const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim()
+  if (domain) return `https://${domain.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
+  return 'http://localhost:8787'
+}
+const APP_URL = appUrl
+/** Per-subscriber one-click unsubscribe URL (GET shows a confirm page, POST unsubscribes). */
+export function unsubscribeUrl(subscriber) {
+  return subscriber?.unsubscribeToken ? `${appUrl()}/nightwatch/unsubscribe/${subscriber.unsubscribeToken}` : null
+}
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -344,9 +363,7 @@ function itemText(x) {
 
 export function renderBriefEmailHtml(brief, subscriber) {
   const base = APP_URL()
-  const unsub = subscriber?.unsubscribeToken
-    ? `${base}/nightwatch/unsubscribe/${subscriber.unsubscribeToken}`
-    : `${base}/#nightwatch02`
+  const unsub = unsubscribeUrl(subscriber) || `${base}/#nightwatch02`
   const link = `${base}/#nightwatch02`
   const ms = brief.marketSummary || {}
   const macro = ms.macro || {}
@@ -422,7 +439,7 @@ export function renderBriefEmailHtml(brief, subscriber) {
 </body></html>`.trim()
 }
 
-export function renderBriefEmailText(brief) {
+export function renderBriefEmailText(brief, subscriber = null) {
   const lines = []
   lines.push(`Alpha of the Day — ${brief.date}`)
   lines.push('')
@@ -447,6 +464,8 @@ export function renderBriefEmailText(brief) {
   lines.push('')
   lines.push(brief.disclaimer)
   lines.push(`Open: ${APP_URL()}/#nightwatch02`)
+  const unsub = unsubscribeUrl(subscriber)
+  if (unsub) lines.push(`Unsubscribe: ${unsub}`)
   return lines.join('\n')
 }
 
@@ -475,12 +494,16 @@ export async function emailSubscribers(brief, send = sendEmail) {
       continue
     }
     const html = renderBriefEmailHtml(brief, s)
-    const text = renderBriefEmailText(brief)
+    const text = renderBriefEmailText(brief, s)
+    const unsub = unsubscribeUrl(s)
     // eslint-disable-next-line no-await-in-loop
     const result = await send({
       to: s.email,
       subject: `Alpha of the Day · ${brief.date}`,
       html, text,
+      // RFC 8058 one-click unsubscribe: Gmail / Yahoo / Apple Mail show a
+      // native "Unsubscribe" button that POSTs to this URL.
+      headers: unsub ? { 'List-Unsubscribe': `<${unsub}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : undefined,
       idempotencyKey: `nightwatch02/${brief.date}/${crypto.createHash('sha256').update(s.email).digest('hex')}`,
     })
     results.push({ to: s.email, ...result })

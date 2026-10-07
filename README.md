@@ -243,7 +243,7 @@ A companion Cloudflare Worker (`relay/worker.js`) transparently proxies Bitget's
 | Page | Purpose |
 |---|---|
 | **Research** | Natural-language terminal. Streams the five-skill research process live and renders the full structured report (regime grid, skill breakdown, catalyst, live wire, thesis, invalidation, plan). |
-| **Alpha of the Day** | AI-authored daily brief on the tokenized U.S. equity universe. Auto-generated at 02:00 UTC; opt-in email delivery. |
+| **Alpha of the Day** | AI-authored daily brief on the tokenized U.S. equity universe. Auto-generated at 07:00 UTC; opt-in email delivery with in-app and one-click email unsubscribe. |
 | **Analysis** | Single-symbol workbench. Ticker + indicators + spot book + cross-venue positioning + macro + symbol-tagged news + earnings → Qwen four-part desk writeup with concrete verdict and levels. |
 | **News** | Live news tape with per-item impact analysis (relevance, direction, tagged assets, severity). |
 | **Signals** | Every generated signal with resolved outcome, plus the last opportunity scan. |
@@ -259,10 +259,10 @@ A companion Cloudflare Worker (`relay/worker.js`) transparently proxies Bitget's
 
 ## Alpha of the Day — daily brief
 
-Every day at **02:00 UTC** the server scans the tokenized-equity universe and publishes an AI market-intelligence brief. Crypto is explicitly out of scope for this brief — only Bitget R-pair equities can become alpha candidates.
+Every day at **07:00 UTC** (before the European open and US pre-market) the server scans the tokenized-equity universe and publishes an AI market-intelligence brief. Crypto is explicitly out of scope for this brief — only Bitget R-pair equities can become alpha candidates.
 
 ```
-02:00 UTC
+07:00 UTC
  → scan the live universe (Bitget R-pair equities, macro tape, news store)
  → rank alpha candidates (24h move · volume z-score · news attention)
  → for each finalist, run the same LocalNightwatchEngine.research the
@@ -456,8 +456,8 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | Web Push notifications | Optional |
 | `RESEND_API_KEY` | Real transactional email (sign-in codes + Alpha of the Day). Without it both fall back to log-only delivery. | Required for email |
 | `EMAIL_FROM` | `From:` address for outbound mail. Default `NIGHTWATCH AI <onboarding@resend.dev>`. Set to a domain-verified sender for production. | Optional |
-| `APP_URL` | Absolute URL used in email links (open-in-app, unsubscribe). Default `http://localhost:8787`. | Recommended for email |
-| `NIGHTWATCH_02_HOUR` / `NIGHTWATCH_02_MINUTE` | When the daily brief fires, in UTC. Default `02` / `00`. | No |
+| `APP_URL` | Absolute URL used in email links (open-in-app, unsubscribe). Falls back to `https://$RAILWAY_PUBLIC_DOMAIN`, then `http://localhost:8787`. | Recommended for email |
+| `NIGHTWATCH_02_HOUR` / `NIGHTWATCH_02_MINUTE` | When the daily brief fires, in UTC. Default `07` / `00`. The UI, emails and unsubscribe page all read this value. | No |
 | `NIGHTWATCH_02_ENABLED` | Set to `0` to disable the daily brief scheduler. | No |
 | `ADMIN_TOKEN` | In production, required in the `X-Admin-Token` header for `POST /nightwatch/run`. | Production |
 | `PORT` / `HOST` | Server bind (default `8787` / `0.0.0.0`) | No |

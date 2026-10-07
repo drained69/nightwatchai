@@ -51,6 +51,46 @@ test('nextFireAt: month-end rollover (Feb 28 22:00 → Mar 1 02:00)', () => {
   assert.equal(next.toISOString(), '2027-03-01T02:00:00.000Z')
 })
 
+test('schedule defaults to 07:00 UTC; env overrides; garbage falls back to the default', () => {
+  const prevH = process.env.NIGHTWATCH_02_HOUR, prevM = process.env.NIGHTWATCH_02_MINUTE
+  try {
+    delete process.env.NIGHTWATCH_02_HOUR; delete process.env.NIGHTWATCH_02_MINUTE
+    assert.equal(sched.DEFAULT_HOUR_UTC, 7)
+    assert.deepEqual([sched.scheduleConfig().hour, sched.scheduleConfig().minute], [7, 0])
+    assert.equal(sched.scheduleLabel(), '07:00 UTC')
+    assert.equal(sched.nextFireAt(new Date('2026-10-07T06:59:59Z')).toISOString(), '2026-10-07T07:00:00.000Z')
+    assert.equal(sched.nextFireAt(new Date('2026-10-07T07:00:00Z')).toISOString(), '2026-10-08T07:00:00.000Z')
+    process.env.NIGHTWATCH_02_HOUR = '9'; process.env.NIGHTWATCH_02_MINUTE = '30'
+    assert.equal(sched.scheduleLabel(), '09:30 UTC')
+    process.env.NIGHTWATCH_02_HOUR = 'soon'; process.env.NIGHTWATCH_02_MINUTE = ''
+    assert.equal(sched.scheduleLabel(), '07:00 UTC')
+  } finally {
+    if (prevH === undefined) delete process.env.NIGHTWATCH_02_HOUR; else process.env.NIGHTWATCH_02_HOUR = prevH
+    if (prevM === undefined) delete process.env.NIGHTWATCH_02_MINUTE; else process.env.NIGHTWATCH_02_MINUTE = prevM
+  }
+})
+
+test('opting in delivers today only after the send time, and only when mail can go out', () => {
+  const s = sched.makeScheduler({})
+  s.enabled = true; s.hour = 7; s.minute = 0
+  let runs = 0
+  s._runOnce = async () => { runs++ }
+  const prevKey = process.env.RESEND_API_KEY, prevFrom = process.env.EMAIL_FROM
+  try {
+    delete process.env.RESEND_API_KEY
+    assert.equal(s.deliverTodayIfDue(new Date('2031-01-05T09:00:00Z')), false, 'no mailer → no attempt')
+    process.env.RESEND_API_KEY = 're_test_key'; process.env.EMAIL_FROM = 'Alpha <alpha@example.com>'
+    assert.equal(s.deliverTodayIfDue(new Date('2031-01-05T06:00:00Z')), false, 'before 07:00 UTC nothing is generated or sent')
+    assert.equal(s.deliverTodayIfDue(new Date('2031-01-05T09:00:00Z')), true, 'after 07:00 with no brief yet → run')
+    assert.equal(runs, 1)
+    s.enabled = false
+    assert.equal(s.deliverTodayIfDue(new Date('2031-01-05T09:00:00Z')), false, 'scheduler switched off → never sends')
+  } finally {
+    if (prevKey === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = prevKey
+    if (prevFrom === undefined) delete process.env.EMAIL_FROM; else process.env.EMAIL_FROM = prevFrom
+  }
+})
+
 test('shouldCatchUp: 04:00 UTC on a day with no brief → true', () => {
   const now = new Date(Date.UTC(2030, 5, 15, 4, 0, 0))
   assert.equal(sched.shouldCatchUp(now, 2, 0), true)
@@ -204,7 +244,8 @@ test('daily delivery records success, retries failure, and never repeats an acce
   process.env.RESEND_API_KEY = 're_test_key'
   process.env.EMAIL_FROM = 'Alpha <alpha@example.com>'
   try {
-  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T04:00:00Z')), true, 'existing brief still needs delivery')
+  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T08:00:00Z')), true, 'existing brief still needs delivery')
+  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T06:00:00Z')), false, 'nothing is sent before the 07:00 UTC send time')
   let attempts = 0
   const keys = []
   const send = async ({ idempotencyKey }) => {
@@ -217,7 +258,7 @@ test('daily delivery records success, retries failure, and never repeats an acce
   assert.equal(nw02.hasPendingSubscribers(brief.date), true)
   assert.equal((await nw02.emailSubscribers(brief, send)).delivered, 1)
   assert.equal(nw02.hasPendingSubscribers(brief.date), false)
-  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T04:00:00Z')), false)
+  assert.equal(sched.shouldCatchUp(new Date('2030-06-18T08:00:00Z')), false)
   assert.equal((await nw02.emailSubscribers(brief, send)).skipped, 1)
   assert.equal(attempts, 2)
   subs.setSubscription({ email: 'daily@example.com', enabled: false })
@@ -247,6 +288,56 @@ test('turning off during a send prevents later queued delivery', async () => {
   })
   assert.deepEqual(sent, ['first@example.com'])
   assert.equal(result.skipped, 1)
+})
+
+test('every email carries a working unsubscribe link and RFC 8058 one-click headers', async () => {
+  const prevApp = process.env.APP_URL, prevDomain = process.env.RAILWAY_PUBLIC_DOMAIN
+  try {
+    delete process.env.APP_URL
+    process.env.RAILWAY_PUBLIC_DOMAIN = 'nightwatchai.watch'
+    assert.equal(nw02.appUrl(), 'https://nightwatchai.watch', 'production must never link to localhost')
+    process.env.APP_URL = 'https://example.test/'
+    assert.equal(nw02.appUrl(), 'https://example.test')
+    delete process.env.APP_URL
+    for (const s of subs.listActiveSubscribers()) subs.setSubscription({ email: s.email, enabled: false })
+    const row = subs.setSubscription({ email: 'links@example.com', enabled: true })
+    const sent = []
+    await nw02.emailSubscribers(deliveryBrief('2030-07-01'), async (msg) => { sent.push(msg); return { delivered: true } })
+    assert.equal(sent.length, 1)
+    const url = `https://nightwatchai.watch/nightwatch/unsubscribe/${row.unsubscribeToken}`
+    assert.equal(sent[0].headers['List-Unsubscribe'], `<${url}>`)
+    assert.equal(sent[0].headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click')
+    assert.ok(sent[0].html.includes(url), 'HTML footer links to the real unsubscribe URL')
+    assert.ok(sent[0].text.includes(`Unsubscribe: ${url}`), 'plain-text part carries it too')
+    assert.ok(!/localhost/.test(sent[0].html + sent[0].text))
+  } finally {
+    if (prevApp === undefined) delete process.env.APP_URL; else process.env.APP_URL = prevApp
+    if (prevDomain === undefined) delete process.env.RAILWAY_PUBLIC_DOMAIN; else process.env.RAILWAY_PUBLIC_DOMAIN = prevDomain
+  }
+})
+
+test('service worker never caches API responses (Alpha of the Day status, brief, on/off state)', async () => {
+  const vm = await import('node:vm')
+  const src = fs.readFileSync(path.join(process.cwd(), 'public/sw.js'), 'utf8')
+  const handlers = {}
+  const sandbox = {
+    self: { addEventListener: (type, fn) => { handlers[type] = fn }, location: { origin: 'https://nightwatchai.watch' }, registration: {}, clients: {} },
+    caches: { match: async () => undefined, open: async () => ({ put: async () => {} }) },
+    fetch: async () => ({ ok: true, clone() { return this } }),
+    URL, Response, clients: {},
+  }
+  vm.runInNewContext(src, sandbox)
+  const intercepted = (pathname, mode = 'cors', method = 'GET') => {
+    let hit = false
+    handlers.fetch({ request: { url: `https://nightwatchai.watch${pathname}`, mode, method }, respondWith: () => { hit = true } })
+    return hit
+  }
+  for (const p of ['/nightwatch/latest', '/nightwatch/status', '/nightwatch/subscription', '/nightwatch/2026-10-07', '/earnings/NVDA', '/backtest/universe', '/some/future/api'])
+    assert.equal(intercepted(p), false, `${p} must go to the network`)
+  assert.equal(intercepted('/nightwatch/unsubscribe/abc', 'navigate', 'POST'), false, 'writes are never intercepted')
+  assert.equal(intercepted('/assets/index-abc123.js'), true, 'hashed build assets are cached')
+  assert.equal(intercepted('/', 'navigate'), true, 'the shell is network-first with offline fallback')
+  assert.match(src, /const CACHE = 'nw-v4'/, 'cache name bumped so the poisoned nw-v3 cache is purged')
 })
 
 /* -------------------------------------------------- email rendering */

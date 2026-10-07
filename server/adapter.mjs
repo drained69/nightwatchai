@@ -59,7 +59,7 @@ import { chat as assayerChat } from './assayer.mjs'
 import { buildLiveContext, liveUniverseStatus, getMacro } from './market-context.mjs'
 import { mailerStatus } from './lib/mailer.mjs'
 import { loadLatestBrief, loadBriefByDate, listBriefDates, _paths as nw02Paths } from './nightwatch02.mjs'
-import { makeScheduler } from './nightwatch02-scheduler.mjs'
+import { makeScheduler, scheduleLabel } from './nightwatch02-scheduler.mjs'
 import { setSubscription, getSubscription, findByUnsubscribeToken, listActiveSubscribers } from './nightwatch02-subscriptions.mjs'
 
 import { LocalNightwatchEngine, DEMO_UNIVERSE, EQUITY_SYMBOLS } from '../src/domain.js'
@@ -133,7 +133,7 @@ startBitgetMcp()
 SignalHistory.startEvaluator()
 // Alerts evaluator
 Alerts.startEvaluator({ sendPush: sendUserPush })
-// Alpha of the Day daily brief scheduler (02:00 UTC by default). The scheduler
+// Alpha of the Day daily brief scheduler (07:00 UTC by default). The scheduler
 // runs in-process, is timezone-aware, and catches up on boot if today's brief
 // window has already passed and no brief file exists yet.
 const nw02 = makeScheduler({ newsStore: news, engine })
@@ -1149,7 +1149,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /nightwatch/latest') {
       if (!enforce(rateGeneral, req, res, () => {}, keyFor)) return
       const brief = loadLatestBrief()
-      if (!brief) return json(res, 404, { error: 'no brief published yet — the first one is generated at 02:00 UTC' })
+      if (!brief) return json(res, 404, { error: `no brief published yet — the first one is generated at ${scheduleLabel()}` })
       return json(res, 200, brief)
     }
     if (route === 'GET /nightwatch/list') {
@@ -1159,7 +1159,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (route === 'GET /nightwatch/status') {
       // Public, cheap — surfaces schedule + mailer state so the UI can show
-      // "next brief at 02:00 UTC" and warn when email delivery isn't wired.
+      // the real send time and warn when email delivery isn't wired.
       return json(res, 200, { scheduler: nw02.status(), mailer: mailerStatus(), manualRunAllowed: process.env.NODE_ENV !== 'production' })
     }
     if (route === 'GET /nightwatch/subscription') {
@@ -1171,6 +1171,7 @@ const server = http.createServer(async (req, res) => {
         subscribedAt: sub?.createdAt || null,
         updatedAt: sub?.updatedAt || null,
         mailerReady: mailerStatus().canDeliver,
+        sendTime: scheduleLabel(),
       })
     }
     if (route === 'POST /nightwatch/subscription') {
@@ -1183,31 +1184,50 @@ const server = http.createServer(async (req, res) => {
       if (targetEmail !== user.email.toLowerCase()) {
         return json(res, 400, { error: 'subscription email must match the signed-in account email' })
       }
+      // The switch must be explicit: "false", 0 or a missing field never turn email on.
+      if (typeof body?.enabled !== 'boolean') return json(res, 400, { error: 'enabled must be true or false' })
       try {
-        const sub = setSubscription({ email: user.email, enabled: body?.enabled !== false, userId: user.id, source: 'ui' })
+        const sub = setSubscription({ email: user.email, enabled: body.enabled, userId: user.id, source: 'ui' })
+        // Opting in after today's send: deliver today's brief now rather than
+        // at the next 30-minute retry. Never fires before the send time.
+        const deliveringToday = sub.enabled ? nw02.deliverTodayIfDue() : false
         return json(res, 200, {
           email: sub.email, enabled: sub.enabled, updatedAt: sub.updatedAt,
           mailerReady: mailerStatus().canDeliver,
+          sendTime: scheduleLabel(),
+          deliveringToday,
         })
       } catch (err) { return json(res, 400, { error: err.message }) }
     }
-    // One-click unsubscribe from an email link. GET-only so it works from any
-    // mail client; returns a tiny confirmation page rather than JSON.
-    if (route.startsWith('GET /nightwatch/unsubscribe/')) {
+    // Unsubscribe from an email link. GET only shows a confirm button: mail
+    // security scanners (Outlook Safe Links, Mimecast…) pre-fetch every link,
+    // and a GET that unsubscribed silently switched people off. The POST does
+    // the work — it is what the confirm button sends and what Gmail / Yahoo
+    // send for the RFC 8058 List-Unsubscribe-Post one-click header.
+    if (route.startsWith('GET /nightwatch/unsubscribe/') || route.startsWith('POST /nightwatch/unsubscribe/')) {
       const token = url.pathname.split('/').pop()
-      const sub = findByUnsubscribeToken(token)
-      cors(res); res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      const sub = /^[a-f0-9]{24}$/.test(token) ? findByUnsubscribeToken(token) : null
+      const page = (title, body) => {
+        cors(res); res.writeHead(sub || req.method === 'GET' ? 200 : 404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' })
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body style="font-family:-apple-system,Segoe UI,sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6;max-width:560px;margin:0 auto"><h1 style="font-weight:500">${title}</h1>${body}</body></html>`)
+      }
       if (!sub) {
-        res.end('<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribe link expired</h1><p>Please toggle "Daily email" off from the Alpha of the Day page in the app.</p></body></html>')
+        page('Unsubscribe link expired', '<p>Turn "Daily email" off from the Alpha of the Day page in the app instead.</p>')
         return
       }
-      setSubscription({ email: sub.email, enabled: false, userId: sub.userId, source: 'email-unsubscribe' })
-      res.end(`<html><body style="font-family:sans-serif;padding:32px;background:#0e0f11;color:#e6e6e6"><h1>Unsubscribed</h1><p><b>${escapeHtmlLite(sub.email)}</b> will no longer receive the daily Alpha of the Day brief (02:00 UTC). You can turn it back on any time from the Alpha of the Day page.</p></body></html>`)
+      if (req.method === 'POST') {
+        setSubscription({ email: sub.email, enabled: false, userId: sub.userId, source: 'email-unsubscribe' })
+        page('Unsubscribed', `<p><b>${escapeHtmlLite(sub.email)}</b> will no longer receive the daily Alpha of the Day brief (${scheduleLabel()}). You can turn it back on any time from the Alpha of the Day page.</p>`)
+        return
+      }
+      page(sub.enabled ? 'Stop the daily brief?' : 'Already unsubscribed', sub.enabled
+        ? `<p>Stop sending the Alpha of the Day brief (${scheduleLabel()}) to <b>${escapeHtmlLite(sub.email)}</b>?</p><form method="post" action="${escapeHtmlLite(url.pathname)}"><button type="submit" style="padding:10px 18px;font-size:15px;background:#e05b6a;color:#fff;border:0;cursor:pointer">Unsubscribe</button></form>`
+        : `<p><b>${escapeHtmlLite(sub.email)}</b> is not receiving the daily brief. Turn it back on from the Alpha of the Day page.</p>`)
       return
     }
     // Admin/dev trigger. In production, require ADMIN_TOKEN header; in dev,
     // any authenticated user can fire it so the demo doesn't need to wait
-    // until 02:00 UTC.
+    // for the scheduled send time.
     if (route === 'POST /nightwatch/run') {
       const isProd = process.env.NODE_ENV === 'production'
       const adminToken = process.env.ADMIN_TOKEN

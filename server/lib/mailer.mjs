@@ -49,7 +49,7 @@ export function mailerStatus() {
  * Never throws on transport errors — callers that need delivery guarantees
  * check `delivered`.
  */
-export async function sendEmail({ to, subject, html, text, from = null, replyTo = null, idempotencyKey = null }) {
+export async function sendEmail({ to, subject, html, text, from = null, replyTo = null, idempotencyKey = null, headers = null }) {
   if (!isValidEmail(to)) return { delivered: false, transport: 'noop', reason: 'invalid recipient' }
   if (!subject || !html) return { delivered: false, transport: 'noop', reason: 'subject + html required' }
   const key = RESEND_KEY()
@@ -64,6 +64,7 @@ export async function sendEmail({ to, subject, html, text, from = null, replyTo 
     html,
     ...(text ? { text } : {}),
     ...(replyTo ? { reply_to: replyTo } : {}),
+    ...(headers && Object.keys(headers).length ? { headers } : {}),
   }
   try {
     const res = await fetch('https://api.resend.com/emails', {

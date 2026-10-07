@@ -710,7 +710,6 @@ data/                     per-user JSON (git-ignored, docker-volume in prod)
 
 Dockerfile · docker-compose.yml · .env.example
 DEPLOYMENT.md             full production checklist
-SUBMISSION.md             hackathon submission text
 ```
 
 ---

@@ -91,6 +91,26 @@ export async function refreshHistory(symbol) {
   return saveHistory(symbol, merged)
 }
 
+/** symbol → in-flight refresh, so concurrent callers share one Bitget fetch. */
+const inflight = new Map()
+
+/**
+ * Cached history for `symbol`, fetched/refreshed from Bitget on demand when
+ * missing or when the newest candle is older than `maxAgeMs`. Concurrent
+ * callers share one fetch. Falls back to whatever is cached if Bitget fails.
+ */
+export async function ensureHistory(symbol, { maxAgeMs = 2 * 3600_000 } = {}) {
+  const existing = loadHistory(symbol)
+  const latestTs = existing?.candles?.[existing.candles.length - 1]?.ts || 0
+  if (existing && Date.now() - latestTs <= maxAgeMs) return existing
+  if (!inflight.has(symbol)) {
+    inflight.set(symbol, refreshHistory(symbol)
+      .catch(err => { logger.warn({ symbol, err: err.message }, 'history refresh failed'); return null })
+      .finally(() => inflight.delete(symbol)))
+  }
+  return (await inflight.get(symbol)) || existing || null
+}
+
 /** Warm every supported symbol once. Best-effort. */
 export async function warmHistory() {
   const results = {}

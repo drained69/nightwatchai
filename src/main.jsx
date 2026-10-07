@@ -39,7 +39,6 @@ function maskEmail(email) {
   if (local.length <= 6) return `${local[0]}******${local.slice(-1)}${domain}`
   return `${local.slice(0, 5)}******${local.slice(-1)}${domain}`
 }
-import { runBacktestSynthetic } from './backtest.js'
 import { AssayerPage, MyPlaybooksPanel, PlaybookDetail, SignInWidget, getStoredUser, getToken, logout } from './ui/GetAgentPages.jsx'
 import { MarketPulse } from './ui/MarketPulse.jsx'
 import { AnalysisPage } from './ui/AnalysisPage.jsx'
@@ -51,7 +50,7 @@ import {
   RESEARCH_QUESTION_SUGGESTIONS, RESEARCH_STEP_MS, addLog, analyzeNewsForUser,
   applyTraderDecision, bitgetTradeUrl, buildReview, classifyIntent, fmtAbs, fmtCap,
   fmtPct, fmtPrice, foldReviewIntoMemory, inferAsset, ingestNewsItem, initialSession, loadSession, nowClock,
-  pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
+  parseThesis, pickNextDemoNews, portfolioImpact, safeUrl, saveSession, shortId,
   uncoveredAssetCandidates,
 } from './domain'
 
@@ -105,6 +104,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
   // universe (e.g. "Dangote IPO"). Persists in the report area until the next
   // successful research so the user can never miss the honest refusal.
   const [unsupportedAsk, setUnsupportedAsk] = useState(null)
+  const [thesisError, setThesisError] = useState(null)
   const authToken = getToken()
   const [bitgetStatus, setBitgetStatus] = useState({ connected: false, model: null, reason: 'checking…' })
   const [personalHydrated, setPersonalHydrated] = useState(false)
@@ -439,7 +439,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
   const notify = (msg) => setToast(msg)
 
   /** Route a natural-language question to the right engine + UI */
-  const submit = async (rawText) => {
+  const submit = async (rawText, opts = {}) => {
     const text = (rawText ?? command).trim()
     if (!text) { notify('Type a question — e.g. "Why is NVDA moving?"'); return }
     if (running) return
@@ -450,7 +450,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
     setSession(s => addLog({ ...s, stage: 'INTAKE' }, 'USER', text, `Intent: ${routed.intent}${routed.asset ? ' · ' + routed.asset : ''}`))
     // Uncovered name (e.g. "research on Dangote IPO"): refuse instead of
     // silently falling back to a BTC report the user never asked for.
-    if (!routed.asset && routed.intent !== 'find-opportunities' && routed.intent !== 'review') {
+    if (!routed.asset && routed.intent !== 'find-opportunities' && routed.intent !== 'review' && routed.intent !== 'thesis-test') {
       const unknown = uncoveredAssetCandidates(text)
       if (unknown.length) {
         const token = unknown[0]
@@ -469,7 +469,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
     setUnsupportedAsk(null)
     try {
       if      (routed.intent === 'research')            await runResearch(text, routed)
-      else if (routed.intent === 'thesis-test')         await runThesis(text)
+      else if (routed.intent === 'thesis-test')         await runThesis(text, opts)
       else if (routed.intent === 'portfolio-impact')    await runPortfolioImpact(text, routed)
       else if (routed.intent === 'execution-help')      await runExecution(text, routed)
       else if (routed.intent === 'review')              await runReview()
@@ -506,19 +506,32 @@ function App({ authUser: signedInUser, onSignedOut }) {
     notify(`Report ready · ${report.symbol} · ${report.signal.status}`)
   }
 
-  const runThesis = async (question) => {
+  const runThesis = async (question, opts = {}) => {
     const cleaned = question.replace(/^\/thesis\s+/i, '').replace(/^\/challenge\s+/i, '')
+    const direction = opts.direction === 'LONG' || opts.direction === 'SHORT' ? opts.direction : null
+    setThesisError(null)
     setSession(s => addLog({ ...s, stage: 'CHALLENGING' }, 'THESIS', 'Stress-testing thesis', cleaned.slice(0, 80)))
-    const response = await provider.run({ intent: 'thesis-test', thesis: cleaned, context: { memory: sessionRef.current.memory } })
-    const artifact = response.artifact.thesisReport
+    const response = await provider.run({ intent: 'thesis-test', thesis: cleaned, direction, context: { memory: sessionRef.current.memory } })
+    // The engine asks instead of guessing when the asset or side is missing.
+    const needs = response.artifact?.thesisError
+    if (needs) {
+      setThesisError({ ...needs, thesis: cleaned })
+      setSession(s => addLog({ ...s, stage: 'IDLE' }, 'THESIS', 'Thesis needs more detail', needs.message))
+      setPage('thesis')
+      notify(needs.message)
+      return
+    }
+    setThesisError(null)
+    const artifact = { ...response.artifact.thesisReport, engine: response.engine || 'LOCAL', offlineFallback: Boolean(response.fallback) }
     for (const skill of artifact.skills) {
       await sleep(RESEARCH_STEP_MS - 120)
       setLiveTrace(t => [...t, skill])
     }
-    setSession(s => addLog({ ...s, theses: [artifact, ...(s.theses || [])].slice(0, 40), stage: 'IDLE' }, 'THESIS', `Verdict ${artifact.verdict} · ${artifact.asset}`, `${(artifact.confidenceBefore * 100).toFixed(0)}% → ${(artifact.confidenceAfter * 100).toFixed(0)}%`))
+    const delta = Math.round((artifact.confidenceAfter - artifact.confidenceBefore) * 100)
+    setSession(s => addLog({ ...s, theses: [artifact, ...(s.theses || [])].slice(0, 40), stage: 'IDLE' }, 'THESIS', `Verdict ${artifact.verdict} · ${artifact.direction} ${artifact.asset}`, `${(artifact.confidenceBefore * 100).toFixed(0)}% → ${(artifact.confidenceAfter * 100).toFixed(0)}% (${delta >= 0 ? '+' : ''}${delta} pts)`))
     setActiveArtifact({ type: 'thesis', payload: artifact })
     setPage('thesis')
-    notify(`Thesis ${artifact.verdict} · confidence ${(artifact.confidenceBefore * 100).toFixed(0)}% → ${(artifact.confidenceAfter * 100).toFixed(0)}%`)
+    notify(`Thesis ${artifact.verdict} · ${artifact.direction} ${artifact.asset} · ${(artifact.confidenceBefore * 100).toFixed(0)}% → ${(artifact.confidenceAfter * 100).toFixed(0)}%`)
   }
 
   const runPortfolioImpact = async (question, routed) => {
@@ -752,7 +765,7 @@ function App({ authUser: signedInUser, onSignedOut }) {
         {page === 'news'      && <NewsPage session={session} setSession={setSession} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
         {page === 'markets'   && <MarketsPage session={session} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} toggleWatch={toggleWatch} />}
         {page === 'signals'   && <SignalsPage session={session} activeArtifact={activeArtifact} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
-        {page === 'thesis'    && <ThesisPage session={session} activeArtifact={activeArtifact} setCommand={setCommand} submit={submit} />}
+        {page === 'thesis'    && <ThesisPage session={session} activeArtifact={activeArtifact} setActiveArtifact={setActiveArtifact} setCommand={setCommand} submit={submit} running={running} thesisError={thesisError} />}
         {page === 'portfolio' && <PortfolioPage session={session} activeArtifact={activeArtifact} closeAtMark={closeAtMark} setCommand={setCommand} submit={submit} />}
         {page === 'backtest'  && <BacktestPage session={session} />}
         {page === 'history'   && <HistoryPage session={session} activeArtifact={activeArtifact} onAsk={q => { setCommand(q); setPage('research'); submit(q) }} />}
@@ -1452,36 +1465,74 @@ function SignalsPage({ session, activeArtifact, onAsk }) {
 
 /* ------------------------------------------------------- Thesis Lab page */
 
-function ThesisPage({ session, activeArtifact, setCommand, submit }) {
+const THESIS_SIDES = [['AUTO', 'Auto-detect'], ['LONG', 'Long'], ['SHORT', 'Short']]
+
+function ThesisPage({ session, activeArtifact, setActiveArtifact, setCommand, submit, running, thesisError }) {
   const [draft, setDraft] = useState('')
+  const [side, setSide] = useState('AUTO')
   const artifact = activeArtifact?.type === 'thesis' ? activeArtifact.payload : (session.theses?.[0] || null)
+  // Show the trader how the desk will read the thesis before it runs.
+  const preview = draft.trim().length >= 4 ? parseThesis(draft, { preferences: session.memory?.preferences }) : null
+  const previewSide = side !== 'AUTO' ? side : preview?.direction
+  const run = () => {
+    const text = draft.trim()
+    if (!text || running) return
+    const q = `/thesis ${text}`
+    setCommand(q)
+    submit(q, { direction: side === 'AUTO' ? null : side })
+  }
   return (
     <div className="page">
       <PageHead title="Thesis Lab" eyebrow={<><TerminalSquare size={12} /> DECISION STRESS-TESTING</>}>
-        <span className="hint-inline">Submit a thesis in trader English. NIGHTWATCH steelmans it, counters it, stress-tests it, and returns a confidence delta.</span>
+        <span className="hint-inline">Submit a thesis in trader English. NIGHTWATCH steelmans it, counters it, stress-tests it against the asset's own Bitget history, and returns a confidence delta.</span>
       </PageHead>
       <div className="thesis-input">
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          rows={3}
-          placeholder='Example: "Long NVDA into the datacenter capex cycle — hyperscaler orders are re-accelerating and street numbers still lag."'
-        />
-        <button className="btn primary" onClick={() => { if (!draft.trim()) return; const q = `/thesis ${draft}`; setCommand(q); submit(q); setDraft('') }}>STRESS-TEST →</button>
+        <div className="thesis-compose">
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run() }}
+            rows={3}
+            placeholder='Example: "Long NVDA into the datacenter capex cycle — hyperscaler orders are re-accelerating. Stop 215, target 260."'
+          />
+          <div className="thesis-controls">
+            <div className="chip-row" role="radiogroup" aria-label="Thesis side">
+              {THESIS_SIDES.map(([id, label]) => <button key={id} type="button" role="radio" aria-checked={side === id} className={side === id ? 'chip mini on' : 'chip mini'} onClick={() => setSide(id)}>{label}</button>)}
+            </div>
+            <span className="thesis-preview">
+              {!preview ? 'Name the asset, your side and why. Optional: stop, target, horizon, "70% confident".'
+                : <>Reads as <b>{previewSide || '— side?'}</b> <b>{preview.asset || '— asset?'}</b> · {preview.horizon.toLowerCase()}{preview.stop ? ` · stop $${fmtPrice(preview.stop)}` : ''}{preview.target ? ` · target $${fmtPrice(preview.target)}` : ''}{preview.conviction != null ? ` · prior ${Math.round(preview.conviction * 100)}%` : ''}{preview.alsoMentioned?.length ? ` · also mentions ${preview.alsoMentioned.join(', ')} (not tested)` : ''}</>}
+            </span>
+          </div>
+        </div>
+        <button className={running ? 'btn primary running' : 'btn primary'} disabled={running || !draft.trim()} onClick={run}>{running ? 'TESTING…' : 'STRESS-TEST →'}</button>
       </div>
 
-      {artifact ? <ThesisResult artifact={artifact} /> : (
-        <div className="empty-report">
-          <div className="empty-icon"><TerminalSquare size={22} /></div>
-          <b>No thesis on file</b>
-          <p>Type a thesis above. NIGHTWATCH will invoke news, market intel, technical, sentiment and macro skills to challenge it.</p>
+      {thesisError && (
+        <div className="empty-report bt-error" role="alert">
+          <div className="empty-icon"><AlertTriangle size={22} /></div>
+          <b>{thesisError.code === 'THESIS_NO_DIRECTION' ? 'Which side are you on?' : 'Which asset?'}</b>
+          <p>{thesisError.message}</p>
+          {thesisError.thesis ? <p className="q">“{thesisError.thesis}”</p> : null}
         </div>
       )}
 
+      {artifact ? <ThesisResult artifact={artifact} /> : (!thesisError && (
+        <div className="empty-report">
+          <div className="empty-icon"><TerminalSquare size={22} /></div>
+          <b>No thesis on file</b>
+          <p>Type a thesis above. NIGHTWATCH runs the news, market-intel, technical, sentiment and macro skills on the live Bitget tape, files each read for or against you, and sizes the stress tests from the asset's own candle history.</p>
+        </div>
+      ))}
+
       {session.theses?.length > 1 ? (
         <div className="panel">
-          <div className="panel-head"><h3>Prior theses</h3><small>{session.theses.length}</small></div>
-          {session.theses.slice(1, 6).map(t => <div className="thesis-row" key={t.id}><b>{t.asset} · {t.direction}</b><span>{t.thesis.slice(0, 100)}</span><em>{t.verdict}</em><small>{(t.confidenceBefore * 100).toFixed(0)}% → {(t.confidenceAfter * 100).toFixed(0)}%</small></div>)}
+          <div className="panel-head"><h3>Prior theses</h3><small>{session.theses.length} · click to reopen</small></div>
+          {session.theses.slice(0, 8).filter(t => t.id !== artifact?.id).slice(0, 6).map(t => (
+            <button type="button" className="thesis-row thesis-row-btn" key={t.id} onClick={() => setActiveArtifact({ type: 'thesis', payload: t })}>
+              <b>{t.asset} · {t.direction}</b><span>{t.thesis.slice(0, 100)}</span><em>{t.verdict}</em><small>{(t.confidenceBefore * 100).toFixed(0)}% → {(t.confidenceAfter * 100).toFixed(0)}%</small>
+            </button>
+          ))}
         </div>
       ) : null}
     </div>
@@ -1489,18 +1540,45 @@ function ThesisPage({ session, activeArtifact, setCommand, submit }) {
 }
 
 function ThesisResult({ artifact }) {
+  const delta = Math.round((artifact.confidenceAfter - artifact.confidenceBefore) * 100)
+  const fighting = artifact.fighting ?? (artifact.contradicting || []).filter(r => !/no confirmation either way/.test(r.claim))
+  const silent = artifact.neutral ?? (artifact.contradicting || []).filter(r => /no confirmation either way/.test(r.claim))
+  const steps = artifact.confidenceSteps || []
+  const parsed = artifact.parsed || {}
+  const offline = artifact.dataMode === 'OFFLINE'
   return (
     <article className="report">
       <header className="report-head">
         <div>
-          <span className="eyebrow"><TerminalSquare size={11} /> THESIS · {new Date(artifact.createdAt).toISOString().slice(11, 16)} UTC</span>
+          <span className="eyebrow"><TerminalSquare size={11} /> THESIS · {new Date(artifact.createdAt).toISOString().slice(0, 16).replace('T', ' ')} UTC{artifact.price ? ` · ${artifact.asset} $${fmtPrice(artifact.price)}` : ''}</span>
           <h2>{artifact.asset} · <em>{artifact.direction}</em> · verdict <em className={artifact.verdict === 'SUPPORTS' ? 'green' : artifact.verdict === 'REFUTES' ? 'red' : 'amber'}>{artifact.verdict}</em></h2>
           <p className="q">“{artifact.thesis}”</p>
         </div>
         <div className="report-badges">
-          <span className="pill outline">{(artifact.confidenceBefore * 100).toFixed(0)}% → {(artifact.confidenceAfter * 100).toFixed(0)}%</span>
+          <span className={`pill ${delta > 0 ? 'green' : delta < 0 ? 'red' : 'outline'}`}>{(artifact.confidenceBefore * 100).toFixed(0)}% → {(artifact.confidenceAfter * 100).toFixed(0)}% · {delta >= 0 ? '+' : ''}{delta} pts</span>
+          {artifact.dataMode && <span className={`pill mini ${offline ? 'red' : 'green'}`}>{offline ? 'OFFLINE · SEEDED' : 'LIVE DATA'}</span>}
+          {artifact.narration?.engine && <span className="pill mini outline">PROSE · {artifact.narration.engine} · NUMBERS CHECKED</span>}
         </div>
       </header>
+
+      {artifact.dataFreshness && <div className={`report-summary thesis-fresh${offline ? ' off' : ''}`}>{artifact.dataFreshness}</div>}
+
+      {artifact.parsed && (
+        <div className="edge-grid thesis-read">
+          <div className="metric"><small>Side</small><b>{artifact.direction}</b><em className="muted">{parsed.directionSource === 'selected' ? 'you selected' : parsed.cues?.length ? `read from “${parsed.cues.map(c => c.phrase).slice(0, 2).join('”, “')}”` : 'parsed'}</em></div>
+          <div className="metric"><small>Horizon</small><b>{String(parsed.horizon || '—').toLowerCase()}</b><em className="muted">~{parsed.horizonDays}d{parsed.earningsIntent && parsed.earningsDate ? ` · ${parsed.earningsIntent === 'INTO' ? 'to' : 'through'} earnings ${parsed.earningsDate}` : ''}</em></div>
+          <div className="metric"><small>Prior</small><b>{(artifact.confidenceBefore * 100).toFixed(0)}%</b><em className="muted">{parsed.conviction != null ? 'your stated conviction' : 'no conviction stated'}</em></div>
+          <div className="metric red"><small>Invalidation</small><b>${fmtPrice(artifact.invalidation.price)}</b><em className="muted">{artifact.invalidation.source || 'derived'}</em></div>
+          <div className="metric green"><small>Target</small><b>{artifact.target ? `$${fmtPrice(artifact.target)}` : '—'}</b><em className="muted">{parsed.target ? `yours${artifact.riskReward ? ` · ${artifact.riskReward}R vs stop` : ''}` : '2R default'}</em></div>
+          <div className={`metric ${artifact.desk?.agrees ? 'green' : 'amber'}`}><small>Desk read</small><b>{artifact.desk ? `${artifact.desk.direction}` : '—'}</b><em className="muted">{artifact.desk ? `${artifact.desk.status === 'NO_TRADE' ? 'sit-out' : 'signal'} · composite ${artifact.desk.composite}` : ''}</em></div>
+        </div>
+      )}
+      {(parsed.ignoredStop || parsed.ignoredTarget) && (
+        <div className="report-summary thesis-fresh off">
+          {parsed.ignoredStop ? `Your stop $${fmtPrice(parsed.ignoredStop)} is on the wrong side of (or too far from) $${fmtPrice(artifact.price)} for a ${artifact.direction.toLowerCase()} — a derived level was used instead. ` : ''}
+          {parsed.ignoredTarget ? `Your target $${fmtPrice(parsed.ignoredTarget)} is on the wrong side of the entry for a ${artifact.direction.toLowerCase()} — a 2R target was used instead.` : ''}
+        </div>
+      )}
 
       <div className="report-grid">
         <Section title="Steelman" icon={<ArrowUpRight size={13} />} tone="green">
@@ -1509,25 +1587,43 @@ function ThesisResult({ artifact }) {
         <Section title="Counter-thesis" icon={<ArrowDownRight size={13} />} tone="amber">
           <p>{artifact.counterThesis}</p>
         </Section>
+        <Section title={`Confidence walk · ${delta >= 0 ? '+' : ''}${delta} pts`} icon={<Sparkles size={13} />}>
+          {steps.length === 0 ? <p className="none">{artifact.confidenceSteps ? 'No read moved conviction — every feed was neutral.' : 'Saved before the confidence walk existed.'}</p> : (
+            <ul className="conf-walk">
+              <li><span>Prior</span><b>{(artifact.confidenceBefore * 100).toFixed(0)}%</b></li>
+              {steps.map((st, i) => <li key={i}><span>{st.label}</span><b className={st.delta >= 0 ? 'up' : 'down'}>{st.delta >= 0 ? '+' : ''}{(st.delta * 100).toFixed(1)}</b></li>)}
+              <li className="total"><span>Posterior</span><b>{(artifact.confidenceAfter * 100).toFixed(0)}%</b></li>
+            </ul>
+          )}
+        </Section>
         <Section title="What the market may be pricing" icon={<LineChart size={13} />}>
           <p>{artifact.marketPricing}</p>
         </Section>
-        <Section title="Supporting evidence" icon={<Database size={13} />} tone="green">
+        <Section title={`Supporting evidence · ${artifact.supporting.length}`} icon={<Database size={13} />} tone="green">
           <ul>{artifact.supporting.map((r, i) => <li key={i}><b>[{r.source}]</b> {r.claim}<em>{r.evidence}</em></li>)}</ul>
-          {artifact.supporting.length === 0 && <p className="none">No supporting evidence surfaced.</p>}
+          {artifact.supporting.length === 0 && <p className="none">No skill on the tape backs this side right now.</p>}
         </Section>
-        <Section title="Contradicting evidence" icon={<Database size={13} />} tone="red">
-          <ul>{artifact.contradicting.map((r, i) => <li key={i}><b>[{r.source}]</b> {r.claim}<em>{r.evidence}</em></li>)}</ul>
-          {artifact.contradicting.length === 0 && <p className="none">Thesis is clean of contradictions.</p>}
+        <Section title={`Fighting evidence · ${fighting.length}`} icon={<Database size={13} />} tone="red">
+          <ul>{fighting.map((r, i) => <li key={i}><b>[{r.source}]</b> {r.claim}<em>{r.evidence}</em></li>)}</ul>
+          {fighting.length === 0 && <p className="none">Nothing on the tape actively fights it.</p>}
+          {silent.length > 0 && <><div className="sub-head">Silent feeds · {silent.length}</div><ul className="dense">{silent.map((r, i) => <li key={i}><b>[{r.source}]</b> {r.claim}<em>{r.evidence}</em></li>)}</ul></>}
         </Section>
         <Section title="Stress tests" icon={<AlertTriangle size={13} />} tone="amber">
-          <div className="mini-table">
-            <div className="mini-head"><span>Scenario</span><span>Shock</span><span>Est P&L</span><span>Survive</span></div>
-            {artifact.stressTests.map((s, i) => <div className="mini-row" key={i}><b>{s.name}</b><span>{s.shock}</span><em className={s.expectedPnlPct >= 0 ? 'up' : 'down'}>{fmtPct(s.expectedPnlPct)}</em><em className={s.survivable ? 'up' : 'down'}>{s.survivable ? 'YES' : 'NO'}</em></div>)}
+          <div className="mini-table thesis-stress">
+            <div className="mini-head"><span>Scenario</span><span>Shock</span><span>Est P&amp;L</span><span>Result</span></div>
+            {artifact.stressTests.map((t, i) => (
+              <div className="mini-row" key={i}>
+                <b>{t.name}{t.basis ? <small>{t.basis}</small> : null}</b>
+                <span>{t.shock}</span>
+                <em className={t.expectedPnlPct >= 0 ? 'up' : 'down'}>{fmtPct(t.expectedPnlPct)}</em>
+                <em className={t.survivable ? 'up' : t.result === 'STOPPED OUT' ? 'amber-txt' : 'down'}>{t.result || (t.survivable ? 'YES' : 'NO')}</em>
+              </div>
+            ))}
           </div>
         </Section>
         <Section title={artifact.invalidation.heading || 'Invalidation'} icon={<ShieldCheck size={13} />}>
-          {artifact.invalidation.price ? <div className="kv"><span>Price</span><b>${fmtPrice(artifact.invalidation.price)}</b></div> : null}
+          {artifact.invalidation.price ? <div className="kv"><span>Price</span><b>${fmtPrice(artifact.invalidation.price)}{artifact.invalidation.source ? ` · ${artifact.invalidation.source}` : ''}</b></div> : null}
+          {artifact.volatility ? <div className="kv"><span>1-day range · beta</span><b>{(artifact.volatility.dailyRange * 100).toFixed(1)}% · β {artifact.volatility.beta} ({artifact.volatility.betaSource})</b></div> : null}
           <ul className="dense">{artifact.invalidation.conditions.map((c, i) => <li key={i}>{c}</li>)}</ul>
         </Section>
         <Section title="Historical analogs" icon={<PieChart size={13} />}>
@@ -1973,116 +2069,194 @@ function NewsCard({ item, onAsk }) {
 
 /* ------------------------------------------------------- Backtest page */
 
+const BT_HORIZONS = [1, 4, 8, 12, 24, 48]
+const fmtBarTime = (ts) => {
+  const d = new Date(ts)
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} ${d.toISOString().slice(11, 16)}`
+}
+
+/** Compounded strategy (net of fees) vs buy & hold, as a small inline chart. */
+function EquityCurve({ curve }) {
+  if (!curve?.length) return null
+  const W = 640, H = 140, P = 8
+  const vals = curve.flatMap(p => [p.strategy, p.buyHold]).filter(Number.isFinite)
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals)
+  const span = hi - lo || 1
+  const x = (i) => P + (i / Math.max(1, curve.length - 1)) * (W - 2 * P)
+  const y = (v) => P + (1 - (v - lo) / span) * (H - 2 * P)
+  const line = (key) => curve.map((p, i) => Number.isFinite(p[key]) ? `${x(i).toFixed(1)},${y(p[key]).toFixed(1)}` : null).filter(Boolean).join(' ')
+  return (
+    <svg className="bt-curve" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Strategy equity curve versus buy and hold">
+      <line x1={P} x2={W - P} y1={y(0)} y2={y(0)} stroke="var(--line-soft)" strokeDasharray="3 3" />
+      <polyline points={line('buyHold')} fill="none" stroke="var(--muted)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      <polyline points={line('strategy')} fill="none" stroke="var(--accent)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
 function BacktestPage({ session }) {
-  const [symbol, setSymbol] = useState('BTC')
+  const fallbackUniverse = (session.universe || []).filter(u => u.class === 'tokenized-equity').map(u => ({ symbol: u.symbol, name: u.name, candles: null }))
+  const [universe, setUniverse] = useState({ symbols: fallbackUniverse, verified: false })
+  const [symbol, setSymbol] = useState('NVDA')
   const [horizon, setHorizon] = useState(8)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const prefs = session.memory?.preferences || {}
+
+  // Only tokenized stocks Bitget currently lists — the server checks the live spot list.
+  useEffect(() => {
+    if (!hasApi()) return
+    let alive = true
+    fetch(apiUrl('/backtest/universe'), { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(body => {
+        if (!alive || !Array.isArray(body?.symbols) || !body.symbols.length) return
+        setUniverse({ symbols: body.symbols, verified: Boolean(body.listingVerified) })
+        if (!body.symbols.some(x => x.symbol === symbol)) setSymbol(body.symbols[0].symbol)
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
   const run = async () => {
     setRunning(true)
+    setError(null)
     try {
-      // Prefer real cached Bitget candles via the adapter; fall back to synthetic offline.
-      if (hasApi()) {
-        try {
-          const res = await fetch(apiUrl('/backtest/live'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol, horizon }),
-            signal: AbortSignal.timeout(25000),
-          })
-          if (res.ok) {
-            const body = await res.json()
-            if (Array.isArray(body?.rows) && body?.stats) {
-              setResult({ symbol, rows: body.rows, stats: body.stats, live: true, candleCount: body.candleCount })
-              return
-            }
-          }
-        } catch { /* fall through to synthetic */ }
+      if (!hasApi()) throw new Error('The backtest replays real Bitget candles and needs the NIGHTWATCH adapter — it is not reachable from this page.')
+      let res
+      try {
+        res = await fetch(apiUrl('/backtest/live'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, horizon, prefs: { style: prefs.style, risk: prefs.risk, minConfidence: prefs.minConfidence, minNetEdge: prefs.minNetEdge } }),
+          signal: AbortSignal.timeout(45000),
+        })
+      } catch {
+        throw new Error('Could not reach the NIGHTWATCH adapter to pull Bitget candles. Check the server is running and try again.')
       }
-      await new Promise(r => setTimeout(r, 0))          // yield to render
-      setResult({ ...runBacktestSynthetic(symbol, { horizon }), live: false })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error || `Backtest failed (${res.status})`)
+      if (!Array.isArray(body?.rows) || !body?.stats) throw new Error('Backtest returned an unexpected response.')
+      setResult(body)
+    } catch (err) {
+      setResult(null)
+      setError(err.message)
     } finally { setRunning(false) }
   }
-  const fmtStat = (v, digits = 1) => v == null ? '—' : `${(v * 100).toFixed(digits)}%`
+
+  const pct = (v, digits = 1) => v == null ? '—' : `${(v * 100).toFixed(digits)}%`
+  const signedPct = (v, digits = 2) => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(digits)}%`
+  const tone = (v) => v == null ? '' : v >= 0 ? 'up' : 'down'
+  const st = result?.stats
+  const meta = result?.meta
+  const selected = universe.symbols.find(u => u.symbol === symbol)
+
   return (
     <div className="page">
-      <PageHead title="Signal backtest" eyebrow={<><BarChart3 size={12} /> {result?.live ? `LIVE BITGET CANDLES · ${result.candleCount} BARS` : 'SIGNAL QUALITY · SYNTHETIC REPLAY'}</>}>
-        <span className="hint-inline">{result?.live ? 'Replaying real cached Bitget 1h candles through the exact same skill-pack + signal engine used in production.' : 'Replays 300 synthetic bars — connect the adapter to backtest on real Bitget candles.'}</span>
+      <PageHead title="Signal backtest" eyebrow={<><BarChart3 size={12} /> TOKENIZED STOCKS · REAL BITGET 1H CANDLES</>}>
+        <span className="hint-inline">Replays Bitget's tokenized-stock R-pairs through the production skill pack + signal engine, with your Settings and real round-trip fees.</span>
       </PageHead>
 
       <div className="panel">
-        <div className="panel-head"><h3>Configure</h3><small>Deterministic seed per symbol</small></div>
+        <div className="panel-head"><h3>Configure</h3><small>{universe.symbols.length} Bitget tokenized stocks{universe.verified ? ' · listing verified live' : ''}</small></div>
         <div className="settings-grid">
-          <label><small>Symbol</small>
+          <label><small>Tokenized stock</small>
             <select value={symbol} onChange={e => setSymbol(e.target.value)}>
-              {session.universe.map(u => <option key={u.symbol} value={u.symbol}>{u.symbol} · {u.name}</option>)}
+              {universe.symbols.map(u => <option key={u.symbol} value={u.symbol}>{u.symbol} · {u.name}{u.pair ? ` · ${u.pair}` : ''}</option>)}
             </select>
+            <em className="field-hint">{selected?.candles ? `${selected.candles.toLocaleString()} cached 1h candles` : 'Candles are fetched from Bitget on first run'}</em>
           </label>
-          <label><small>Forward horizon (bars)</small><input type="number" min="1" max="48" value={horizon} onChange={e => setHorizon(Number(e.target.value) || 8)} /></label>
+          <label><small>Hold per decision</small>
+            <select value={horizon} onChange={e => setHorizon(Number(e.target.value))}>
+              {BT_HORIZONS.map(h => <option key={h} value={h}>{h} bar{h === 1 ? '' : 's'} ({h}h)</option>)}
+            </select>
+            <em className="field-hint">One decision every {horizon}h, held {horizon}h · persona {(prefs.style || 'EVENT_DRIVEN').replace(/_/g, ' ').toLowerCase()} / {(prefs.risk || 'MODERATE').toLowerCase()}</em>
+          </label>
           <div style={{ alignSelf: 'end' }}>
-            <button className={running ? 'btn primary running' : 'btn primary'} onClick={run} disabled={running}>{running ? 'RUNNING…' : 'RUN BACKTEST'}</button>
+            <button className={running ? 'btn primary running' : 'btn primary'} onClick={run} disabled={running || !universe.symbols.length}>{running ? 'REPLAYING…' : 'RUN BACKTEST'}</button>
           </div>
         </div>
       </div>
 
-      {result && (
+      {error && (
+        <div className="empty-report bt-error" role="alert">
+          <div className="empty-icon"><AlertTriangle size={22} /></div>
+          <b>Backtest unavailable</b>
+          <p>{error}</p>
+        </div>
+      )}
+
+      {result && st && (
         <>
+          <div className="panel">
+            <div className="panel-head"><h3>{meta?.pair || result.symbol} · strategy vs buy &amp; hold</h3><small>{fmtBarTime(meta.firstTs)} → {fmtBarTime(meta.lastTs)} UTC</small></div>
+            <div className="bt-curve-wrap">
+              <EquityCurve curve={st.curve} />
+              <div className="bt-legend"><span><i className="sw strat" /> Signals, net of fees {signedPct(st.strategyReturn)}</span><span><i className="sw hold" /> Buy &amp; hold {signedPct(st.buyHoldReturn)}</span></div>
+            </div>
+          </div>
+
           <div className="stat-strip">
-            <div><small>SIGNAL RATE</small><b>{result.stats.signalCount}/{result.stats.total}</b><em className="muted">{fmtStat(result.stats.signalCount / result.stats.total)}</em></div>
-            <div><small>LONG ACC</small><b className={result.stats.longAccuracy >= 0.5 ? 'up' : 'down'}>{fmtStat(result.stats.longAccuracy)}</b><em className="muted">{result.stats.longCount} calls</em></div>
-            <div><small>SHORT ACC</small><b className={result.stats.shortAccuracy >= 0.5 ? 'up' : 'down'}>{fmtStat(result.stats.shortAccuracy)}</b><em className="muted">{result.stats.shortCount} calls</em></div>
-            <div><small>PRECISION @MOVE</small><b>{fmtStat(result.stats.precisionOnMove)}</b><em className="muted">≥{fmtStat(result.stats.minAbsForwardPct)} move</em></div>
-            <div><small>LIFT vs BASELINE</small><b className={result.stats.lift >= 0 ? 'up' : 'down'}>{fmtStat(result.stats.lift, 2)}</b><em className="muted">LONG mean − all mean</em></div>
+            <div><small>Strategy (net)</small><b className={tone(st.strategyReturn)}>{signedPct(st.strategyReturn)}</b><em className="muted">vs buy &amp; hold {signedPct(st.buyHoldReturn)}</em></div>
+            <div><small>Net win rate</small><b className={st.netWinRate == null ? '' : st.netWinRate >= 0.5 ? 'up' : 'down'}>{pct(st.netWinRate)}</b><em className="muted">profitable after fees</em></div>
+            <div><small>Avg net / trade</small><b className={tone(st.avgNetReturn)}>{signedPct(st.avgNetReturn)}</b><em className="muted">friction {pct(st.avgFriction, 2)} round-trip</em></div>
+            <div><small>Max drawdown</small><b className={st.maxDrawdown < 0 ? 'down' : ''}>{signedPct(st.maxDrawdown, 1)}</b><em className="muted">compounded, net</em></div>
+            <div><small>Timing lift</small><b className={tone(st.timingLift)}>{signedPct(st.timingLift, 3)}</b><em className="muted">vs random timing, same mix</em></div>
+          </div>
+          <div className="stat-strip">
+            <div><small>Signal rate</small><b>{st.signalCount}/{st.total}</b><em className="muted">{pct(st.total ? st.signalCount / st.total : null)} of decisions traded</em></div>
+            <div><small>Hit rate</small><b className={st.hitRate == null ? '' : st.hitRate >= 0.5 ? 'up' : 'down'}>{pct(st.hitRate)}</b><em className="muted">direction right, pre-fees</em></div>
+            <div><small>Long acc</small><b className={st.longAccuracy == null ? '' : st.longAccuracy >= 0.5 ? 'up' : 'down'}>{pct(st.longAccuracy)}</b><em className="muted">{st.longCount} calls</em></div>
+            <div><small>Short acc</small><b className={st.shortAccuracy == null ? '' : st.shortAccuracy >= 0.5 ? 'up' : 'down'}>{pct(st.shortAccuracy)}</b><em className="muted">{st.shortCount} calls</em></div>
+            <div><small>Precision @move</small><b>{pct(st.precisionOnMove)}</b><em className="muted">moves ≥ {pct(st.minAbsForwardPct)}</em></div>
           </div>
 
           <div className="panel">
-            <div className="panel-head"><h3>Per-signal ledger</h3><small>{result.rows.length} bars · {symbol}</small></div>
-            <div className="pos-table" style={{ maxHeight: 420, overflow: 'auto' }}>
-              <div className="pos-head"><span>Bar</span><span>Dir</span><span>Status</span><span>Conf</span><span>Composite</span><span>Net edge</span><span>Fwd return</span><span>Outcome</span><span></span></div>
-              {result.rows.slice(-40).reverse().map((r, i) => {
-                const correct = (r.direction === 'LONG' && r.forwardReturn > 0) || (r.direction === 'SHORT' && r.forwardReturn < 0)
-                const outcome = r.status === 'NO_TRADE' ? 'SKIP' : correct ? 'HIT' : 'MISS'
-                return (
-                  <div className="pos-row" key={i}>
-                    <span className="mono muted">{new Date(r.ts).toISOString().slice(11, 16)}</span>
-                    <span className={r.direction === 'LONG' ? 'pill green mini' : r.direction === 'SHORT' ? 'pill amber mini' : 'pill outline mini'}>{r.direction}</span>
-                    <span className={r.status === 'NO_TRADE' ? 'pill outline mini' : 'pill green mini'}>{r.status}</span>
-                    <b className="mono">{(r.confidence * 100).toFixed(0)}%</b>
-                    <b className="mono">{r.composite.toFixed(2)}</b>
-                    <b className={r.netEdge >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.netEdge)}</b>
-                    <b className={r.forwardReturn >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.forwardReturn)}</b>
-                    <span className={`pill mini ${outcome === 'HIT' ? 'green' : outcome === 'MISS' ? 'red' : 'outline'}`}>{outcome}</span>
-                    <span />
-                  </div>
-                )
-              })}
+            <div className="panel-head"><h3>Decision ledger</h3><small>last {Math.min(60, result.rows.length)} of {result.rows.length} · {result.symbol}</small></div>
+            <div className="pos-table bt-ledger" style={{ maxHeight: 460, overflow: 'auto' }}>
+              <div className="pos-head"><span>Bar (UTC)</span><span>Dir</span><span>Status</span><span>Conf</span><span>Composite</span><span>Net edge</span><span>Fwd move</span><span>Net P&amp;L</span><span>Outcome</span></div>
+              {result.rows.slice(-60).reverse().map(r => (
+                <div className="pos-row" key={r.ts}>
+                  <span className="mono muted">{fmtBarTime(r.ts)}</span>
+                  <span className={r.direction === 'LONG' ? 'pill green mini' : r.direction === 'SHORT' ? 'pill amber mini' : 'pill outline mini'}>{r.direction}</span>
+                  <span className={r.status === 'NO_TRADE' ? 'pill outline mini' : 'pill green mini'}>{r.status === 'NO_TRADE' ? 'SIT-OUT' : 'SIGNAL'}</span>
+                  <b className="mono">{(r.confidence * 100).toFixed(0)}%</b>
+                  <b className="mono">{r.composite.toFixed(3)}</b>
+                  <b className={r.netEdge >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.netEdge, 2)}</b>
+                  <b className={r.forwardReturn >= 0 ? 'up mono' : 'down mono'}>{fmtPct(r.forwardReturn, 2)}</b>
+                  <b className={r.netReturn == null ? 'mono muted' : r.netReturn >= 0 ? 'up mono' : 'down mono'}>{r.netReturn == null ? '—' : fmtPct(r.netReturn, 2)}</b>
+                  <span className={`pill mini ${r.outcome === 'WIN' ? 'green' : r.outcome === 'FEES' ? 'amber' : r.outcome === 'LOSS' ? 'red' : 'outline'}`} title={r.outcome === 'FEES' ? 'Direction was right, but fees + spread exceeded the move' : undefined}>{r.outcome}</span>
+                </div>
+              ))}
             </div>
           </div>
 
           <div className="panel">
-            <div className="panel-head"><h3>How to read this</h3><small>Interpretation</small></div>
+            <div className="panel-head"><h3>What was replayed</h3><small>Method</small></div>
             <div className="settings-body">
               <p className="lead">
-                <b>Signal rate</b> is what fraction of bars produced a tradable signal (rest were sit-outs).
-                <b> Long/short accuracy</b> is directional hit-rate on called bars.
-                <b> Precision @ move</b> filters to bars where the market actually moved ≥ {fmtStat(result.stats.minAbsForwardPct)} — this is the number that matters most.
-                <b> Lift</b> is the excess mean forward return on LONG-signalled bars vs all bars. Positive lift is the minimum bar for a signal to have any information content.
+                <b>{result.candleCount.toLocaleString()}</b> real Bitget 1h candles for <b>{meta.pair}</b>. Each decision bar rebuilds the indicator set from the <b>{meta.warmup}</b> candles ending at that bar — the same window and formulas the live desk uses — so nothing after the bar is visible. <b>{meta.evaluated}</b> decisions, one every <b>{meta.step}h</b>, each held <b>{meta.horizon}h</b>.
               </p>
               <p className="lead">
-                {result.live
-                  ? <>This report replays <b>real Bitget 1h candles</b> ({result.candleCount} bars, cached server-side). Indicators, signals and forward returns are all computed from the actual price series — no lookahead.</>
-                  : <>This report uses <b>synthetic</b> candles because the adapter is unreachable. Start the server (<code>npm run server</code>) to backtest on real cached Bitget candles via <code>POST /backtest/live</code>.</>}
+                <b>Replayed per bar:</b> {meta.replayed.join(', ')}{meta.macroSource !== 'neutral' ? ` (macro regime from the ${meta.macroSource})` : ''}. <b>Held neutral:</b> {meta.heldNeutral.join(', ')} — there is no point-in-time archive of headlines or fear gauges, so the replay never invents one. Live reports also use those feeds, so live signals can differ from these.
+              </p>
+              <p className="lead">
+                <b>Costs:</b> {meta.feePctPerSide.toFixed(2)}% Bitget taker fee per side plus a {meta.spreadBps} bps spread ({meta.spreadSource || 'assumption'}). <b>Gates:</b> your {meta.persona.risk.toLowerCase()} / {meta.persona.style.replace(/_/g, ' ').toLowerCase()} persona and Settings floors decide SIGNAL vs SIT-OUT exactly as they do live.
+              </p>
+              <p className="lead">
+                <b>Hit rate</b> ignores fees; <b>net win rate</b> and <b>strategy</b> include them. In the ledger, <b>WIN</b> made money after costs, <b>FEES</b> called the direction right but the move didn't cover costs, <b>LOSS</b> went the wrong way. <b>Timing lift</b> is the signals' mean directional move minus what the same long/short mix earns on randomly timed bars — positive means the engine picks better moments, not just a side. Past replay results do not predict future returns.
               </p>
             </div>
           </div>
         </>
       )}
 
-      {!result && (
+      {!result && !error && (
         <div className="empty-report">
           <div className="empty-icon"><BarChart3 size={22} /></div>
           <b>No backtest yet</b>
-          <p>Pick a symbol and horizon above, then RUN BACKTEST. NIGHTWATCH will replay the skill pack and signal synthesizer through 300 bars and report precision + lift.</p>
+          <p>Pick a Bitget tokenized stock and a holding period, then RUN BACKTEST. NIGHTWATCH replays its signal engine over real hourly candles and reports what the signals would have returned after fees.</p>
         </div>
       )}
     </div>

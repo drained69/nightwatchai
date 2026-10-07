@@ -35,7 +35,7 @@ import { makeSseBus } from './lib/sse.mjs'
 import { makeLlm } from './lib/llm.mjs'
 import { requireAuth, devLogin, signup, login, publicUser, requestSignInCode, verifySignInCode } from './lib/auth.mjs'
 import { loadSessionFor, patchSessionFor, savePushSubscription, paths } from './lib/store.mjs'
-import { getAllTickers, getAllTickersLive, getTicker, computeIndicators, listingStatus } from './providers/bitget.mjs'
+import { getAllTickers, getAllTickersLive, getTicker, computeIndicators, listingStatus, isListed, pairFor } from './providers/bitget.mjs'
 import { startBitgetWs, stopBitgetWs, getWsStatus } from './providers/bitget-ws.mjs'
 import { startBitgetMcp, stopBitgetMcp, callMcpTool, listMcpTools, mcpStatus } from './providers/bitget-mcp.mjs'
 import { getPositioning, getSpotBookDepth } from './providers/crossvenue.mjs'
@@ -43,11 +43,11 @@ import { getMarketIntelSnapshot } from './providers/marketintel.mjs'
 import { getEarningsFor, getUpcomingEarnings, EQUITY_UNIVERSE as EARNINGS_UNIVERSE } from './providers/earnings.mjs'
 import { makeNewsStore, FEEDS } from './providers/news.mjs'
 import { liveEnhanceArtifact } from './live-enhance.mjs'
-import { warmHistory, loadHistory, historyStatus, SUPPORTED as HISTORY_SUPPORTED } from './history.mjs'
+import { warmHistory, loadHistory, ensureHistory, historyStatus, SUPPORTED as HISTORY_SUPPORTED } from './history.mjs'
 import * as SignalHistory from './signal-history.mjs'
 import { buildAuthorizeUrl, exchangeCodeForToken, isLiveEnabled, killSwitch, storeUserToken, submitLiveOrder } from './providers/bitget-trading.mjs'
 import { publicKey as vapidPublicKey, deliverToAll as pushToAll, shouldPushForUser, sendPush as sendUserPush } from './lib/push.mjs'
-import { analyzeNewsForUser, inferAsset } from '../src/domain.js'
+import { analyzeNewsForUser, inferAsset, parseThesis } from '../src/domain.js'
 import { loadSessionFor as loadUserSession, listUsers } from './lib/store.mjs'
 import * as Alerts from './alerts.mjs'
 import { shareReport, readSharedByToken } from './sharing.mjs'
@@ -62,7 +62,7 @@ import { loadLatestBrief, loadBriefByDate, listBriefDates, _paths as nw02Paths }
 import { makeScheduler } from './nightwatch02-scheduler.mjs'
 import { setSubscription, getSubscription, findByUnsubscribeToken, listActiveSubscribers } from './nightwatch02-subscriptions.mjs'
 
-import { LocalNightwatchEngine, DEMO_UNIVERSE } from '../src/domain.js'
+import { LocalNightwatchEngine, DEMO_UNIVERSE, EQUITY_SYMBOLS } from '../src/domain.js'
 import { runBacktestFromCandles } from '../src/backtest.js'
 
 /* -------------------------------------------------- config */
@@ -250,6 +250,16 @@ function limitParam(raw, dflt, max) {
   const n = Math.floor(Number(raw))
   return Number.isFinite(n) && n > 0 ? Math.min(max, n) : dflt
 }
+/** Whitelist the persona fields the signal engine reads; drop anything else. */
+function sanitizeBacktestPrefs(p) {
+  if (!p || typeof p !== 'object') return undefined
+  const out = {}
+  if (['EVENT_DRIVEN', 'TREND_FOLLOW', 'MEAN_REVERT', 'MACRO'].includes(p.style)) out.style = p.style
+  if (['CONSERVATIVE', 'MODERATE', 'AGGRESSIVE'].includes(p.risk)) out.risk = p.risk
+  if (Number.isFinite(p.minConfidence)) out.minConfidence = Math.max(0, Math.min(1, p.minConfidence))
+  if (Number.isFinite(p.minNetEdge)) out.minNetEdge = Math.max(-0.05, Math.min(0.05, p.minNetEdge))
+  return Object.keys(out).length ? out : undefined
+}
 function keyFor(req) {
   const auth = req.headers.authorization
   if (auth?.startsWith('Bearer ')) return 'jwt:' + auth.slice(7, 32)
@@ -297,6 +307,67 @@ Invalidation price: ${r.invalidation?.price || 'n/a'}`
   if (out.shortThesis)  next.report.thesis.short     = String(out.shortThesis).slice(0, 400)
   if (out.longThesis)   next.report.thesis.long      = String(out.longThesis).slice(0, 400)
   return { artifact: next, engine: llm.provider.toUpperCase() }
+}
+
+/** Numbers in `text`, normalised so "1,234.50", "−1234.5" and "1234.5%" compare equal. */
+function numbersIn(text) {
+  return (String(text || '').match(/\d[\d,]*(?:\.\d+)?/g) || []).map(n => String(Number(n.replace(/,/g, ''))))
+}
+
+/**
+ * Optional LLM rewrite of the Thesis Lab prose (steelman, counter, pricing,
+ * final assessment). The engine's deterministic text is the fallback, and any
+ * rewritten field that contains a number not present in the computed facts is
+ * discarded — narration may rephrase, never invent.
+ */
+async function narrateThesis(artifact) {
+  const t = artifact?.thesisReport
+  if (!t || !llm.enabled) return { artifact, engine: 'LOCAL' }
+  const ev = (e) => `${e.claim} (${e.evidence})`
+  const facts = {
+    thesis: t.thesis,
+    asset: t.asset, direction: t.direction, price: t.price, verdict: t.verdict,
+    traderRationale: t.parsed?.rationale || null,
+    confidencePct: { before: Math.round(t.confidenceBefore * 100), after: Math.round(t.confidenceAfter * 100) },
+    supporting: (t.supporting || []).map(ev),
+    fighting: (t.fighting || []).map(ev),
+    silent: (t.neutral || []).map(ev),
+    stressTests: (t.stressTests || []).map(x => `${x.name}: ${x.shock} → ${x.survivable ? 'passes' : 'fails'} (${x.basis || ''})`),
+    invalidation: { price: t.invalidation?.price, source: t.invalidation?.source }, target: t.target,
+    desk: t.desk ? `${t.desk.direction} ${t.desk.status} composite ${t.desk.composite}` : null,
+    draft: { steelman: t.steelman, counterThesis: t.counterThesis, marketPricing: t.marketPricing, finalAssessment: t.finalAssessment },
+  }
+  const prompt = `You are NIGHTWATCH AI's thesis desk. A trader submitted a thesis and the engine has already tested it. Using ONLY the FACTS below, return JSON:
+{
+  "steelman": string,        // 2-3 sentences: the strongest honest case FOR the trader's thesis — build on their own rationale and the supporting evidence
+  "counterThesis": string,   // 2-3 sentences: the strongest case AGAINST — fighting evidence, silent feeds, failing stress tests
+  "marketPricing": string,   // 1 sentence: how much of the view the tape already prices
+  "finalAssessment": string  // 2 sentences: verdict, the confidence move, the biggest risk, the invalidation level. End with "You own the size decision."
+}
+Rules: never invent catalysts, facts, numbers or dates; every number you write must already appear in FACTS. Do not change the verdict or the direction. Plain, specific trader English — no hype.
+FACTS: ${JSON.stringify(facts)}`
+  metrics.llm_calls++
+  const out = await llm.jsonComplete(prompt)
+  if (!out || typeof out !== 'object') return { artifact, engine: 'LOCAL' }
+  const allowed = new Set(numbersIn(JSON.stringify(facts)))
+  const next = structuredClone(artifact)
+  const rewritten = []
+  for (const key of ['steelman', 'counterThesis', 'marketPricing', 'finalAssessment']) {
+    const text = typeof out[key] === 'string' ? out[key].replace(/\s+/g, ' ').trim() : ''
+    if (text.length < 20 || text.length > 900) continue
+    const stray = numbersIn(text).filter(n => !allowed.has(n))
+    if (stray.length) { logger.debug({ key, stray }, 'thesis narration rejected: unverified numbers'); continue }
+    next.thesisReport[key] = text
+    rewritten.push(key)
+  }
+  if (!rewritten.length) return { artifact, engine: 'LOCAL' }
+  next.thesisReport.narration = { engine: llm.provider.toUpperCase(), fields: rewritten, numbersVerified: true }
+  return { artifact: next, engine: llm.provider.toUpperCase() }
+}
+
+/** Resolve `p`, or `fallback` after `ms` — keeps slow upstreams off the request path. */
+function withTimeout(p, ms, fallback = null) {
+  return Promise.race([Promise.resolve(p).catch(() => fallback), new Promise(r => setTimeout(() => r(fallback), ms))])
 }
 
 /* -------------------------------------------------- Bitget MCP probe */
@@ -445,7 +516,16 @@ const server = http.createServer(async (req, res) => {
       try {
         // Live context: real tape + real wire news + real macro for EVERY intent.
         // The seeded engine only sees demo values when Bitget/Yahoo are unreachable.
-        const assetHint = request.asset || inferAsset(request.question || request.thesis || '') || null
+        // Thesis Lab binds the FIRST asset the trader wrote ("long AMD vs NVDA" → AMD).
+        // A thesis with no asset or side is answered straight away with the
+        // engine's question — no live-context build or candle fetch for it.
+        const thesisParsed = request.intent === 'thesis-test' ? parseThesis(request.thesis || request.question || '') : null
+        if (thesisParsed && thesisParsed.needs.some(n => !(n === 'direction' && (request.direction === 'LONG' || request.direction === 'SHORT')))) {
+          const artifact = await engine.run({ ...request, context: { memory: request.context?.memory } })
+          return json(res, 200, { intent: request.intent, engine: 'LOCAL', bitgetLive: false, liveData: false, artifact })
+        }
+        const thesisAsset = thesisParsed?.asset || null
+        const assetHint = request.asset || thesisAsset || inferAsset(request.question || request.thesis || '') || null
         const liveCtx = await buildLiveContext(news, assetHint).catch(err => { logger.warn({ err: err.message }, 'live context build failed'); return null })
         // Trim the client session before engine work: the server's own live
         // universe is authoritative, and shipping the full session (news feed,
@@ -458,6 +538,24 @@ const server = http.createServer(async (req, res) => {
         const enriched = liveCtx
           ? { ...request, context: { ...slimCtx, universe: liveCtx.universe, macro: liveCtx.macro, fearGreed: liveCtx.fearGreed, btcChange24h: liveCtx.btcChange24h, news: liveCtx.news, newsBySymbol: liveCtx.newsBySymbol } }
           : { ...request, context: slimCtx }
+        // Thesis Lab stress tests are sized from the asset's own Bitget history:
+        // candles (daily range, worst 24h, largest 1h gap), a benchmark series
+        // for measured beta (RSPY for stocks, BTC for crypto), and the next
+        // earnings date for stocks.
+        if (request.intent === 'thesis-test' && thesisAsset && liveCtx) {
+          const row = DEMO_UNIVERSE.find(u => u.symbol === thesisAsset)
+          const benchSym = row?.class === 'crypto' ? 'BTC' : 'SPY'
+          const cryptoLinked = row?.class === 'tokenized-equity' && /btc|eth|crypto|stablecoin|miner/i.test(row?.sector || '')
+          const [h, b, btc, earnings] = await Promise.all([
+            withTimeout(ensureHistory(thesisAsset), 8000, null),
+            thesisAsset === benchSym ? null : withTimeout(ensureHistory(benchSym), 8000, null),
+            cryptoLinked ? withTimeout(ensureHistory('BTC'), 8000, null) : null,
+            row?.class === 'tokenized-equity' ? withTimeout(getEarningsFor(thesisAsset), 5000, null) : null,
+          ])
+          const window = 24 * 90
+          if (h?.candles?.length) enriched.context.history = { candles: h.candles.slice(-window), benchmark: (b || h).candles.slice(-window), btc: btc?.candles?.slice(-window) || null }
+          if (earnings) enriched.context.earnings = earnings
+        }
         const artifact = await engine.run(enriched)
         // Live overlay — real cross-venue positioning + market intel + book depth
         const { artifact: withLive, live } = request.intent === 'research'
@@ -468,7 +566,9 @@ const server = http.createServer(async (req, res) => {
               memory: clientCtx.memory,
             })
           : { artifact, live: {} }
-        const { artifact: rewritten, engine: engineName } = await narrateReport(withLive, request.question || request.thesis)
+        const { artifact: rewritten, engine: engineName } = request.intent === 'thesis-test'
+          ? await narrateThesis(withLive)
+          : await narrateReport(withLive, request.question || request.thesis)
         const bitget = probeBitget()
         // Record the signal for the public history + accuracy ledger
         if (request.intent === 'research' && rewritten?.report?.signal?.status === 'SIGNAL') {
@@ -676,15 +776,46 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { symbol: h.symbol, count: h.candles.length, updatedAt: h.updatedAt, candles: h.candles.slice(-limit) })
     }
 
-    // Backtest against cached historical candles
+    // Backtest universe: tokenized U.S. stocks only, and only the R-pairs
+    // Bitget's live spot list actually carries.
+    if (route === 'GET /backtest/universe') {
+      await getAllTickers().catch(() => null)          // teaches isListed() Bitget's current list
+      const listing = listingStatus()
+      const symbols = EQUITY_SYMBOLS.filter(sym => isListed(sym)).map(sym => {
+        const a = DEMO_UNIVERSE.find(u => u.symbol === sym)
+        const h = loadHistory(sym)
+        return {
+          symbol: sym, name: a?.name || sym, sector: a?.sector || null, pair: pairFor(sym),
+          candles: h?.candles?.length || 0,
+          fromTs: h?.candles?.[0]?.ts ?? null,
+          toTs: h?.candles?.[h.candles.length - 1]?.ts ?? null,
+        }
+      })
+      return json(res, 200, { symbols, listingVerified: listing.known, unlisted: EQUITY_SYMBOLS.filter(sym => !isListed(sym)) })
+    }
+
+    // Backtest a tokenized stock against real Bitget 1h candles.
     if (route === 'POST /backtest/live') {
       // CPU-heavy synchronous replay — keep anonymous callers from pinning the loop.
       if (!enforce(rateResearch, req, res, () => {}, keyFor)) return
       let body; try { body = await readJson(req) } catch { return json(res, 400, { error: 'invalid json' }) }
-      const symbol = String(body.symbol || 'BTC').toUpperCase()
-      const h = loadHistory(symbol)
-      if (!h) return json(res, 404, { error: `no history for ${symbol}. Wait for warm-up or POST /history/warm` })
-      const result = runBacktestFromCandles(symbol, h.candles, { step: body.step || 6, horizon: body.horizon || 8, minAbsForwardPct: body.minAbsForwardPct || 0.005 })
+      const symbol = String(body.symbol || '').toUpperCase()
+      if (!EQUITY_SYMBOLS.includes(symbol)) return json(res, 400, { error: `${symbol || 'symbol'} is not a Bitget tokenized stock in coverage` })
+      await getAllTickers().catch(() => null)
+      if (!isListed(symbol)) return json(res, 404, { error: `${pairFor(symbol)} is not listed on Bitget spot` })
+      const horizon = limitParam(body.horizon, 8, 48)
+      const h = await ensureHistory(symbol)
+      if (!h?.candles?.length) return json(res, 502, { error: `Could not load Bitget candles for ${pairFor(symbol)} — try again shortly` })
+      if (h.candles.length < 200 + horizon + 1) return json(res, 422, { error: `${pairFor(symbol)} has only ${h.candles.length} hourly candles on Bitget — need at least ${200 + horizon + 1} to replay` })
+      // Macro regime per bar from the Bitget S&P 500 tokenized ETF tape.
+      const spy = symbol === 'SPY' ? h : await ensureHistory('SPY').catch(() => null)
+      const ticker = (await getAllTickers().catch(() => null))?.[symbol]
+      const spreadBps = Number.isFinite(ticker?.spreadBps) ? Number(ticker.spreadBps.toFixed(2)) : undefined
+      const prefs = sanitizeBacktestPrefs(body.prefs)
+      const result = runBacktestFromCandles(symbol, h.candles, { horizon, prefs, spreadBps, benchmarkCandles: spy?.candles || null })
+      result.meta.pair = pairFor(symbol)
+      result.meta.spreadSource = spreadBps != null ? 'live Bitget spread' : 'default assumption'
+      result.meta.historyUpdatedAt = h.updatedAt
       return json(res, 200, { symbol, candleCount: h.candles.length, ...result })
     }
     if (route === 'POST /history/warm') {

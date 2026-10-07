@@ -5,8 +5,9 @@ import {
   PaperExecution, applyTraderDecision, buildResearchReport, buildReview,
   classifyIntent, coerceSession, findOpportunities, fmtCap, fmtPct, fmtPrice,
   foldReviewIntoMemory, inferAsset, initialSession, migrateFromLegacy, portfolioImpact, runSkillPack,
-  stressTestThesis, synthesizeSignal, uncoveredAssetCandidates,
+  parseThesis, stressTestThesis, synthesizeSignal, uncoveredAssetCandidates,
 } from './domain.js'
+import { syntheticCandles } from './backtest.js'
 
 /* ---------- Universe + formatters ---------- */
 
@@ -187,22 +188,101 @@ test('buildResearchReport shape covers all mandatory sections', () => {
 
 /* ---------- Thesis Lab ---------- */
 
-test('stressTestThesis returns verdict and confidence delta', () => {
+test('stressTestThesis returns verdict, confidence walk and stress tests', () => {
   const seed = initialSession()
   const res = stressTestThesis({ thesis: 'Long NVDA here because AI demand stays strong', memory: seed.memory })
   assert.equal(res.asset, 'NVDA')
-  assert.ok(['SUPPORTS','REFUTES','MIXED'].includes(res.verdict))
-  assert.ok(res.confidenceAfter <= res.confidenceBefore)
+  assert.equal(res.direction, 'LONG')
+  assert.ok(['SUPPORTS', 'REFUTES', 'MIXED'].includes(res.verdict))
+  assert.equal(res.confidenceBefore, 0.5, 'no stated conviction → 50% prior')
+  // The walk is auditable: prior + every step ≈ posterior.
+  const walked = res.confidenceBefore + res.confidenceSteps.reduce((s, x) => s + x.delta, 0)
+  assert.ok(Math.abs(walked - res.confidenceAfter) < 0.02)
   assert.ok(res.stressTests.length >= 5)
-  assert.ok(res.invalidation.price > 0)
-  assert.ok(typeof res.steelman === 'string' && res.steelman.length > 10)
-  assert.ok(typeof res.counterThesis === 'string' && res.counterThesis.length > 10)
+  assert.ok(res.stressTests.every(t => typeof t.basis === 'string' && t.basis.length > 5))
+  assert.ok(res.invalidation.price > 0 && res.invalidation.price < res.price, 'long stop sits below entry')
+  assert.ok(res.target > res.price, 'long target sits above entry')
+  assert.ok(res.steelman.length > 10 && res.counterThesis.length > 10)
+  assert.equal(res.dataMode, 'OFFLINE', 'seeded universe must be labelled offline')
 })
 
-test('stressTestThesis defaults to BTC when no ticker is present', () => {
+test('stressTestThesis: evidence can raise conviction as well as lower it', () => {
+  const ind = { live: true, last: 200, ema20: 196, ema50: 190, rsi14: 58, atrPct: 0.6, atr14: 1.2, trend: 'UP', macdCross: 'BULL', support: 194, resistance: 212, change7d: 0.05, volumeZ: 0.2, candleCount: 200 }
+  const market = { ...DEMO_UNIVERSE.find(a => a.symbol === 'NVDA'), price: 200, change24h: 1.2, change7d: 5, atrPct: 0.6, spreadBps: 1, live: true, indicators: ind }
+  const universe = DEMO_UNIVERSE.map(u => u.symbol === 'NVDA' ? market : u)
+  const ctx = { newsBySymbol: { NVDA: [{ headline: 'Nvidia wins hyperscaler order', direction: 'UP', magnitude: 0.7, severity: 'MED', source: 'Reuters' }, { headline: 'Nvidia raises guidance', direction: 'UP', magnitude: 0.6, severity: 'HIGH', source: 'Wire' }] },
+    macro: { live: true, riskRegime: 'RISK_ON', vix: { last: 14 }, spx: { changePct: 0.8 }, ndx: { changePct: 1.1 }, dxy: { last: 98 } } }
+  const long = stressTestThesis({ thesis: 'Long NVDA on the capex cycle', memory: initialSession().memory, universe, context: ctx })
+  const short = stressTestThesis({ thesis: 'Short NVDA, the capex cycle is peaking', memory: initialSession().memory, universe, context: ctx })
+  assert.equal(long.dataMode, 'LIVE')
+  assert.ok(long.confidenceAfter > long.confidenceBefore, 'aligned tape raises conviction')
+  assert.ok(short.confidenceAfter < short.confidenceBefore, 'opposed tape lowers conviction')
+  assert.ok(long.supporting.length > short.supporting.length)
+  assert.ok(short.fighting.length >= 2)
+  assert.notEqual(short.verdict, 'SUPPORTS')
+})
+
+test('stressTestThesis: honours stated conviction, stop and target; rejects wrong-side levels', () => {
   const seed = initialSession()
-  const res = stressTestThesis({ thesis: 'Risk assets rip into year-end', memory: seed.memory })
-  assert.equal(res.asset, 'BTC')
+  const nvda = DEMO_UNIVERSE.find(a => a.symbol === 'NVDA')
+  const stop = Math.round(nvda.price * 0.95), target = Math.round(nvda.price * 1.1)
+  const t = stressTestThesis({ thesis: `Long NVDA, 70% confident, stop ${stop} target ${target}`, memory: seed.memory })
+  assert.equal(t.confidenceBefore, 0.7)
+  assert.equal(t.invalidation.price, stop)
+  assert.equal(t.invalidation.source, 'yours')
+  assert.equal(t.target, target)
+  const bad = stressTestThesis({ thesis: `Long NVDA, stop ${Math.round(nvda.price * 1.05)}`, memory: seed.memory })
+  assert.equal(bad.parsed.ignoredStop, Math.round(nvda.price * 1.05))
+  assert.ok(bad.invalidation.price < nvda.price)
+})
+
+test('stressTestThesis: stress tests use real candle history when supplied', () => {
+  const candles = syntheticCandles('NVDA', 24 * 60, 200)
+  const t = stressTestThesis({ thesis: 'Long NVDA this week', memory: initialSession().memory, context: { history: { candles, benchmark: syntheticCandles('SPY', 24 * 60, 600) } } })
+  const names = t.stressTests.map(x => x.name)
+  assert.ok(names.includes('Worst 24h in the sample'))
+  assert.ok(names.includes('Largest 1h gap against you'))
+  assert.ok(t.stressTests[0].basis.includes('Bitget 1h candles'))
+  assert.equal(t.volatility.betaSource, 'measured')
+})
+
+test('stressTestThesis: refuses to guess a missing asset or side', () => {
+  const seed = initialSession()
+  assert.throws(() => stressTestThesis({ thesis: 'Risk assets rip into year-end', memory: seed.memory }), e => e.code === 'THESIS_NO_ASSET')
+  assert.throws(() => stressTestThesis({ thesis: 'Stress-test my NVDA view', memory: seed.memory }), e => e.code === 'THESIS_NO_DIRECTION')
+  const forced = stressTestThesis({ thesis: 'Stress-test my NVDA view', memory: seed.memory, direction: 'SHORT' })
+  assert.equal(forced.direction, 'SHORT')
+  assert.equal(forced.parsed.directionSource, 'selected')
+})
+
+test('stressTestThesis: "into earnings" ends at the real print; holding through it is penalised', () => {
+  const ctx = { earnings: { daysToNext: 4, nextEarningsDate: '2026-10-11' } }
+  const into = stressTestThesis({ thesis: 'Long PLTR into earnings', memory: initialSession().memory, context: ctx })
+  const through = stressTestThesis({ thesis: 'Long PLTR through earnings', memory: initialSession().memory, context: ctx })
+  assert.equal(into.parsed.horizonDays, 4)
+  assert.equal(into.parsed.earningsIntent, 'INTO')
+  assert.ok(into.stressTests.some(t => t.name.startsWith('Earnings')))
+  assert.ok(!into.confidenceSteps.some(st => /earnings/i.test(st.label)))
+  assert.ok(through.confidenceSteps.some(st => /earnings/i.test(st.label)))
+})
+
+test('parseThesis: trader English → asset, side, horizon, levels', () => {
+  const p = (t) => parseThesis(t)
+  assert.equal(p('Long NVDA short-term on the AI update').direction, 'LONG', '"short-term" is a horizon, not a side')
+  assert.equal(p("I don't think AMD goes higher from here").direction, 'SHORT', 'negation flips the cue')
+  assert.equal(p('I am not bullish on TSLA').direction, 'SHORT')
+  assert.equal(p('MSTR short squeeze incoming').direction, 'LONG')
+  assert.equal(p('buy the dip in PLTR after the sell-off').direction, 'LONG')
+  assert.equal(p('Short AAPL overnight, demand is fading').direction, 'SHORT')
+  assert.equal(p('Stress-test my NVDA thesis').direction, null)
+  assert.equal(p('Compare AMD with NVDA, long AMD').asset, 'AMD', 'first asset written wins')
+  assert.deepEqual(p('Compare AMD with NVDA, long AMD').alsoMentioned, ['NVDA'])
+  assert.equal(p('nvidia breaks out this week').asset, 'NVDA')
+  assert.equal(p('what does it cost to hold this').asset, null, 'everyday words are not tickers')
+  const lv = p('Long PLTR because government AI budgets keep growing, 70% confident, stop 170 target 220 into earnings')
+  assert.deepEqual([lv.conviction, lv.stop, lv.target, lv.horizon], [0.7, 170, 220, 'SWING'])
+  assert.equal(lv.rationale, 'government AI budgets keep growing')
+  assert.ok(p('Risk assets rip into year-end').needs.includes('asset'))
 })
 
 /* ---------- Portfolio impact ---------- */
@@ -364,11 +444,19 @@ test('LocalNightwatchEngine.research returns a research report', async () => {
   assert.equal(artifact.report.symbol, 'NVDA')
 })
 
-test('LocalNightwatchEngine.thesisTest returns a thesis report', async () => {
+test('LocalNightwatchEngine.thesisTest returns a thesis report, or asks when it cannot', async () => {
   const engine = new LocalNightwatchEngine()
   const artifact = await engine.run({ intent: 'thesis-test', thesis: 'Long BTC into ETF flows', context: { memory: initialSession().memory } })
   assert.ok(artifact.thesisReport)
   assert.equal(artifact.thesisReport.asset, 'BTC')
+  const noSide = await engine.run({ intent: 'thesis-test', thesis: 'Challenge my TSLA view', context: { memory: initialSession().memory } })
+  assert.equal(noSide.thesisReport, null)
+  assert.equal(noSide.thesisError.code, 'THESIS_NO_DIRECTION')
+  const sided = await engine.run({ intent: 'thesis-test', thesis: 'Challenge my TSLA view', direction: 'LONG', context: { memory: initialSession().memory } })
+  assert.equal(sided.thesisReport.direction, 'LONG')
+  const noAsset = await engine.run({ intent: 'thesis-test', thesis: 'Long Dangote into the IPO', context: { memory: initialSession().memory } })
+  assert.equal(noAsset.thesisError.code, 'THESIS_NO_ASSET')
+  assert.match(noAsset.thesisError.message, /dangote/i)
 })
 
 test('executionHelp never fabricates a directional plan on a NO_TRADE signal', async () => {

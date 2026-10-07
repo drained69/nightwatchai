@@ -482,6 +482,16 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 .stat-strip b { font: 500 17px 'IBM Plex Mono'; color: var(--text) }
 .stat-strip em { font-style: normal; font: 400 10px 'IBM Plex Mono' }
 
+/* Backtest */
+.bt-curve-wrap { padding: 14px 24px 16px; display: flex; flex-direction: column; gap: 8px }
+.bt-curve { width: 100%; height: 140px; display: block; background: var(--panel-2); border: 1px solid var(--line-soft) }
+.bt-legend { display: flex; flex-wrap: wrap; gap: 18px; font: 400 10px 'IBM Plex Mono'; color: var(--muted) }
+.bt-legend .sw { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px }
+.bt-legend .sw.strat { background: var(--accent); height: 3px }
+.bt-legend .sw.hold { background: var(--muted) }
+.bt-ledger .pos-head, .bt-ledger .pos-row { grid-template-columns: 1.15fr .65fr .8fr .55fr .75fr .8fr .8fr .8fr .65fr }
+.bt-error p { color: var(--text-2) }
+
 /* Impact card */
 .impact { display: flex; flex-direction: column }
 .impact-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1.5px solid var(--line) }
@@ -510,6 +520,29 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
 }
 .thesis-input textarea:focus { outline: none; border-color: var(--accent) }
 .thesis-input .btn { align-self: flex-start; margin-top: 4px }
+.thesis-compose { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px }
+.thesis-compose textarea { width: 100%; box-sizing: border-box }
+.thesis-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px }
+.thesis-preview { font: 400 10px/1.5 'IBM Plex Mono'; color: var(--muted); font-style: italic; min-width: 0; overflow-wrap: anywhere }
+.thesis-preview b { color: var(--text); font-style: normal; font-weight: 600 }
+.thesis-row-btn { width: 100%; background: transparent; border: 0; border-bottom: 1px dotted var(--line-soft); text-align: left; cursor: pointer; color: inherit }
+.thesis-row-btn:hover { background: var(--panel-2) }
+.thesis-row-btn:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -2px }
+.thesis-fresh { padding: 10px 28px; font-size: 11px; color: var(--muted); font-style: italic }
+.thesis-fresh.off { color: var(--accent) }
+.thesis-read .metric em { font-style: normal; font: 400 9px/1.4 'IBM Plex Mono'; color: var(--muted); overflow-wrap: anywhere }
+.report-head h2 em.green { color: var(--up) }
+.report-head h2 em.amber { color: var(--amber) }
+.report-head h2 em.red { color: var(--accent) }
+.sec ul.conf-walk li { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0 }
+.sec ul.conf-walk li span { color: var(--text-2); font-size: 11px }
+.sec ul.conf-walk li.total { border-top: 1px solid var(--line); border-bottom: 0; padding-top: 6px }
+.sec ul.conf-walk li.total span, .sec ul.conf-walk li.total b { color: var(--text); font-weight: 600 }
+.sec .sub-head { margin-top: 8px; font: 600 9px 'IBM Plex Mono'; letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase }
+.thesis-stress .mini-row { align-items: start }
+.thesis-stress .amber-txt { color: var(--amber) }
+.thesis-stress .mini-row b small { display: block; margin-top: 2px; font: 400 9px/1.35 'IBM Plex Mono'; color: var(--muted) }
+.empty-report .q { font-style: italic; color: var(--text-2) }
 .thesis-row { display: grid; grid-template-columns: 1fr 2fr .7fr .7fr; gap: 12px; align-items: center; padding: 12px 24px; border-bottom: 1px dotted var(--line-soft); font: 400 11px 'IBM Plex Mono' }
 .thesis-row b { color: var(--text); font-weight: 600 } .thesis-row span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic }
 
@@ -693,6 +726,7 @@ nav { display: flex; flex-direction: column; gap: 1px; flex: 1 }
   .report-grid { grid-template-columns: 1fr }
   .stat-strip { grid-template-columns: repeat(2, 1fr) }
   .stat-strip > div { border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft) }
+  .stat-strip > div:nth-child(odd):last-child { grid-column: span 2 }
   .ticker-tape { display: none }
 }
 @media (max-width: 780px) {

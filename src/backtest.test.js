@@ -20,22 +20,88 @@ test('syntheticCandles: deterministic for the same seed', () => {
 })
 
 test('runBacktestSynthetic returns coherent stats', () => {
-  const result = runBacktestSynthetic('BTC', { n: 300, step: 6, horizon: 8 })
+  const result = runBacktestSynthetic('NVDA', { n: 600, horizon: 8 })
   assert.ok(result.rows.length > 20, 'should produce many rows')
   const s = result.stats
   assert.equal(s.total, result.rows.length)
-  assert.ok(s.longCount + s.shortCount + s.flatCount === s.total)
-  assert.ok(s.signalCount === s.longCount + s.shortCount)
-  if (s.longAccuracy != null)  assert.ok(s.longAccuracy  >= 0 && s.longAccuracy  <= 1)
-  if (s.shortAccuracy != null) assert.ok(s.shortAccuracy >= 0 && s.shortAccuracy <= 1)
-  if (s.precisionOnMove != null) assert.ok(s.precisionOnMove >= 0 && s.precisionOnMove <= 1)
+  assert.equal(s.signalCount + s.sitOutCount, s.total)
+  assert.equal(s.signalCount, s.longCount + s.shortCount)
+  assert.equal(s.flatCount + s.gatedCount, s.sitOutCount)
+  for (const k of ['hitRate', 'longAccuracy', 'shortAccuracy', 'netWinRate', 'precisionOnMove', 'recallOnMove']) {
+    if (s[k] != null) assert.ok(s[k] >= 0 && s[k] <= 1, `${k} in [0,1]`)
+  }
+  assert.ok(Number.isFinite(s.buyHoldReturn))
+  assert.ok(s.maxDrawdown <= 0)
 })
 
-test('runBacktestFromCandles accepts arbitrary candles', () => {
-  const c = syntheticCandles('ETH', 200)
-  const result = runBacktestFromCandles('ETH', c, { step: 8, horizon: 6 })
-  assert.equal(result.symbol, 'ETH')
-  assert.ok(result.rows.length > 5)
+test('runBacktestFromCandles: warm-up matches production (200 candles) and defaults to non-overlapping decisions', () => {
+  const c = syntheticCandles('AAPL', 400)
+  const r = runBacktestFromCandles('AAPL', c, { horizon: 6 })
+  assert.equal(r.meta.warmup, 200)
+  assert.equal(r.meta.step, 6)
+  assert.equal(r.meta.overlapping, false)
+  assert.equal(r.rows[0].ts, c[199].ts)
+  for (let k = 1; k < r.rows.length; k++) assert.equal(r.rows[k].ts - r.rows[k - 1].ts, 6 * 3600_000)
+  assert.ok(r.rows.every(row => row.exitTs - row.ts === 6 * 3600_000))
+})
+
+test('runBacktestFromCandles: no lookahead — changing future candles never changes past decisions', () => {
+  const c = syntheticCandles('MSFT', 500)
+  const a = runBacktestFromCandles('MSFT', c, { horizon: 4 })
+  const tampered = c.map((bar, i) => i > 350 ? { ...bar, close: bar.close * 1.5, high: bar.high * 1.5, low: bar.low * 1.5 } : bar)
+  const b = runBacktestFromCandles('MSFT', tampered, { horizon: 4 })
+  for (const row of a.rows.filter(r => r.ts <= c[350].ts)) {
+    const twin = b.rows.find(x => x.ts === row.ts)
+    assert.equal(twin.direction, row.direction)
+    assert.equal(twin.composite, row.composite)
+    assert.equal(twin.status, row.status)
+  }
+})
+
+test('runBacktestFromCandles: no seeded per-symbol data leaks into the replay', () => {
+  // Seeded fallbacks are keyed by symbol. With news/sentiment/macro held
+  // neutral, two tickers on identical candles must produce identical calls.
+  const c = syntheticCandles('X', 500)
+  const a = runBacktestFromCandles('NVDA', c, { horizon: 8 })
+  const b = runBacktestFromCandles('AMD', c, { horizon: 8 })
+  assert.deepEqual(a.rows.map(r => [r.direction, r.status, r.composite]), b.rows.map(r => [r.direction, r.status, r.composite]))
+})
+
+test('runBacktestFromCandles: net P&L is gross directional return minus the engine friction', () => {
+  const r = runBacktestFromCandles('TSLA', syntheticCandles('TSLA', 700), { horizon: 8, spreadBps: 3 })
+  const traded = r.rows.filter(x => x.status === 'SIGNAL')
+  for (const t of traded) {
+    const dir = t.direction === 'LONG' ? 1 : -1
+    assert.ok(Math.abs(t.grossReturn - dir * t.forwardReturn) < 1e-12)
+    assert.ok(Math.abs(t.netReturn - (t.grossReturn - t.friction)) < 1e-12)
+    assert.ok(t.friction >= 0.0023 - 1e-9, 'fees 0.20% round-trip + 3 bps spread')
+  }
+  for (const s of r.rows.filter(x => x.status === 'NO_TRADE')) {
+    assert.equal(s.netReturn, null)
+    assert.equal(s.outcome, 'SKIP')
+  }
+})
+
+test('runBacktestFromCandles: benchmark candles drive a per-bar macro regime', () => {
+  const c = syntheticCandles('NVDA', 500)
+  const spy = syntheticCandles('SPY', 500)
+  const r = runBacktestFromCandles('NVDA', c, { horizon: 8, benchmarkCandles: spy })
+  assert.ok(r.rows.every(x => ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(x.macroRegime)))
+  assert.ok(r.meta.replayed.includes('macro-analyst'))
+  const none = runBacktestFromCandles('NVDA', c, { horizon: 8 })
+  assert.ok(none.rows.every(x => x.macroRegime === null))
+  assert.ok(none.meta.heldNeutral.includes('macro-analyst'))
+})
+
+test('runBacktestFromCandles: hostile options are clamped, short series return empty stats', () => {
+  const c = syntheticCandles('NVDA', 300)
+  const r = runBacktestFromCandles('NVDA', c, { step: -5, horizon: 9999 })
+  assert.equal(r.meta.step, 1)
+  assert.equal(r.meta.horizon, 168)
+  const short = runBacktestFromCandles('NVDA', syntheticCandles('NVDA', 150), { horizon: 8 })
+  assert.equal(short.rows.length, 0)
+  assert.equal(short.stats.total, 0)
+  assert.equal(short.stats.strategyReturn, null)
 })
 
 /* ---------- playbook condition replay ---------- */

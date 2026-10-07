@@ -33,7 +33,7 @@ const OPS    = new Set(['<', '>', '<=', '>=', '==', '!='])
 export function heuristicParseAlert(text) {
   const t = String(text || '').toLowerCase()
   // Shared matcher: whole universe, case-aware for tickers that double as
-  // words (COST, CAT, SPY) so "if the cost drops" never arms a Costco alert.
+  // words (COST, SPY, KO) so "if the cost drops" never arms a Costco alert.
   const [asset] = findTickers(text)
   if (!asset) return null
   const conditions = []

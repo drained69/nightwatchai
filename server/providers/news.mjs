@@ -202,7 +202,6 @@ const ASSET_HINTS = [
   { symbol: 'BA',    words: ['boeing'] },
   { symbol: 'LMT',   words: ['lockheed', 'lockheed martin'] },
   { symbol: 'GE',    words: ['ge aerospace'] },
-  { symbol: 'CAT',   words: ['caterpillar'] },
   { symbol: 'RIVN',  words: ['rivian', 'rivn'] },
   { symbol: 'LCID',  words: ['lucid group', 'lucid motors', 'lcid'] },
   { symbol: 'RACE',  words: ['ferrari'] },

@@ -16,6 +16,8 @@
  * decisions, or paper positions. The public STORAGE_KEY is the anonymous slot;
  * `storageKeyFor(userId)` returns the per-user slot.
  */
+import { volatilityProfile, betaVs } from './indicators.js'
+
 export const STORAGE_KEY_PREFIX = 'nightwatch.session.v3'
 export const STORAGE_KEY = `${STORAGE_KEY_PREFIX}.anon`
 export const LEGACY_STORAGE_KEYS = ['nightwatch.session.v3', 'nightwatch.session.v2', 'nightwatch.session.v1']
@@ -47,7 +49,10 @@ export const INTENTS = ['research', 'thesis-test', 'portfolio-impact', 'executio
 
 /**
  * Extended tokenized-equity coverage: [symbol, name, sector, seedPrice, beta, atrPct, marketCapUsdBn].
- * Seed price/ATR/beta are rough offline placeholders (change24h/7d seed at 0) —
+ * Every row is a Bitget spot R-pair (R<TICKER>USDT, baseCoin r<TICKER>) verified
+ * against /api/v2/spot/public/symbols — names Bitget does not list (e.g.
+ * Caterpillar, which has no RCATUSDT) are left out rather than shown as
+ * tradable. Seed price/ATR/beta are rough offline placeholders (change24h/7d seed at 0) —
  * with the API reachable every row is replaced by the real Bitget R-pair tape,
  * and the server skips any pair Bitget doesn't list (see bitget.mjs isListed).
  */
@@ -115,7 +120,6 @@ const EXTENDED_EQUITIES = [
   ['BA',   'Boeing',               'Aerospace',         220,  1.30, 2.4,  170],
   ['LMT',  'Lockheed Martin',      'Defense',           480,  0.50, 1.5,  112],
   ['GE',   'GE Aerospace',         'Aerospace',         280,  1.20, 2.0,  300],
-  ['CAT',  'Caterpillar',          'Industrials',       480,  1.10, 2.0,  225],
   // Autos / EV / China
   ['RIVN', 'Rivian',               'Auto / EV',          14,  1.90, 4.8,   16],
   ['LCID', 'Lucid',                'Auto / EV',          20,  2.00, 5.5,    6],
@@ -169,7 +173,7 @@ export const CRYPTO_SYMBOL_LIST = DEMO_UNIVERSE.filter(a => a.class === 'crypto'
  * "V"). They only count as a mention when written in caps or $-prefixed, so
  * "what does it cost" never resolves to Costco.
  */
-const AMBIGUOUS_TICKERS = new Set(['ARM', 'HOOD', 'COST', 'PEP', 'BA', 'GE', 'CAT', 'RACE', 'SPY', 'MA', 'V', 'KO', 'DIS', 'MU', 'SNOW', 'SHOP', 'UBER', 'GS'])
+const AMBIGUOUS_TICKERS = new Set(['ARM', 'HOOD', 'COST', 'PEP', 'BA', 'GE', 'RACE', 'SPY', 'MA', 'V', 'KO', 'DIS', 'MU', 'SNOW', 'SHOP', 'UBER', 'GS'])
 
 /** Every universe ticker mentioned in `text`, in universe order. */
 export function findTickers(text) {
@@ -552,13 +556,15 @@ function runNewsBriefing(symbol, market, ctx = {}) {
   // ---- live context, but nothing tagged to this symbol: say so. Falling
   // through to the seeded branch here invented a random "beat" and a canned
   // catalyst ("Staking + L2 activity update") inside a LIVE report.
-  if (ctx.newsBySymbol && typeof ctx.newsBySymbol === 'object') {
+  // Historical replay (backtest) takes the same neutral path: there is no
+  // point-in-time wire archive, so each bar reads as "no tagged headline".
+  if (ctx.replay || (ctx.newsBySymbol && typeof ctx.newsBySymbol === 'object')) {
     return {
       skill: 'news-briefing',
-      title: `${symbol} · no tagged headlines this cycle`,
+      title: ctx.replay ? `${symbol} · news held neutral in replay` : `${symbol} · no tagged headlines this cycle`,
       confidence: 0.5,
-      excerpt: 'The live wire has no classified headline for this symbol right now.',
-      source: 'live wire ingest',
+      excerpt: ctx.replay ? 'No point-in-time headline archive — the wire is treated as silent for every replayed bar.' : 'The live wire has no classified headline for this symbol right now.',
+      source: ctx.replay ? 'historical replay' : 'live wire ingest',
       data: {
         catalyst: 'No symbol-specific headline on the live wire',
         beat: false, consensus: null, printed: null,
@@ -747,6 +753,24 @@ function runSentiment(symbol, market, ctx = {}) {
       },
     }
   }
+  // Live server context (or a historical replay) but the gauge feed is
+  // missing: report neutral and say so. The seeded branch below would put a
+  // random fear/greed number inside a LIVE report or a backtest bar.
+  if (ctx.replay || (ctx.newsBySymbol && typeof ctx.newsBySymbol === 'object')) {
+    const why = ctx.replay ? 'not reconstructible per bar in replay' : `${isCrypto ? 'Fear & Greed' : 'VIX'} feed unavailable this cycle`
+    return {
+      skill: 'sentiment-analyst',
+      title: `${symbol} · sentiment neutral · ${ctx.replay ? 'replay' : 'feed unavailable'}`,
+      confidence: 0.5,
+      excerpt: `Held neutral — ${why}.`,
+      source: ctx.replay ? 'historical replay' : 'live context · gauge missing',
+      data: {
+        tone: 'NEUTRAL', score: 0.5, crowding: 'LOW', gauge: null, fearGreed: null, fearGreedTrend7d: null,
+        longShortRatio: null, fundingRate: null, putCallSkew: null, ivRank: null,
+        neutral: true, live: false,
+      },
+    }
+  }
   const score = 0.35 + rand(symbol, 'sent-score') * 0.55
   const crowding = score > 0.75 ? 'HIGH' : score > 0.55 ? 'MED' : 'LOW'
   const tone = score > 0.6 ? 'POSITIVE' : score < 0.45 ? 'NEGATIVE' : 'NEUTRAL'
@@ -771,7 +795,9 @@ function runSentiment(symbol, market, ctx = {}) {
 
 function runMacro(symbol, market, ctx = {}) {
   const macro = ctx.macro
-  const btcChange24h = ctx.btcChange24h ?? DEMO_UNIVERSE.find(a => a.symbol === 'BTC')?.change24h ?? 0
+  const liveOrReplay = ctx.replay || (ctx.newsBySymbol && typeof ctx.newsBySymbol === 'object')
+  const btcChange24h = ctx.btcChange24h ?? (liveOrReplay ? null : DEMO_UNIVERSE.find(a => a.symbol === 'BTC')?.change24h ?? 0)
+  const btcTxt = btcChange24h != null ? ` · BTC ${btcChange24h >= 0 ? '+' : ''}${Number(btcChange24h).toFixed(1)}%` : ''
   if (macro?.live) {
     // ---- REAL macro tape (Yahoo: DXY / SPX / NDX / VIX / UST10Y) ----
     const regime = macro.riskRegime === 'RISK_ON' ? 'RISK_ON' : macro.riskRegime === 'RISK_OFF' ? 'RISK_OFF' : 'NEUTRAL'
@@ -785,11 +811,13 @@ function runMacro(symbol, market, ctx = {}) {
       skill: 'macro-analyst',
       title: `Macro · ${regime.replace('_', '-').toLowerCase()} · ${confirms ? 'confirms' : 'against'} ${symbol}`,
       confidence: 0.75,
-      excerpt: `DXY ${dxy?.toFixed(1) ?? '—'}${macro.dxy?.changePct != null ? ` (${macro.dxy.changePct >= 0 ? '+' : ''}${macro.dxy.changePct}%)` : ''} · VIX ${vix?.toFixed(1) ?? '—'} · SPX ${macro.spx?.changePct != null ? `${macro.spx.changePct >= 0 ? '+' : ''}${macro.spx.changePct}%` : '—'} · BTC ${btcChange24h >= 0 ? '+' : ''}${Number(btcChange24h).toFixed(1)}%`,
-      source: 'yahoo-finance-public · live cross-asset',
+      excerpt: macro.replay
+        ? `S&P proxy (Bitget RSPY) ${macro.spx?.changePct != null ? `${macro.spx.changePct >= 0 ? '+' : ''}${macro.spx.changePct}%` : '—'} over 24h · VIX not replayable`
+        : `DXY ${dxy?.toFixed(1) ?? '—'}${macro.dxy?.changePct != null ? ` (${macro.dxy.changePct >= 0 ? '+' : ''}${macro.dxy.changePct}%)` : ''} · VIX ${vix?.toFixed(1) ?? '—'} · SPX ${macro.spx?.changePct != null ? `${macro.spx.changePct >= 0 ? '+' : ''}${macro.spx.changePct}%` : '—'}${btcTxt}`,
+      source: macro.replay ? 'historical replay · Bitget RSPY tape' : 'yahoo-finance-public · live cross-asset',
       data: {
         cryptoRegime: regime,
-        btcChange24h: Number(Number(btcChange24h).toFixed(2)),
+        btcChange24h: btcChange24h != null ? Number(Number(btcChange24h).toFixed(2)) : null,
         dxy,
         dxyChangePct: macro.dxy?.changePct ?? null,
         spxChangePct: macro.spx?.changePct ?? null,
@@ -802,7 +830,23 @@ function runMacro(symbol, market, ctx = {}) {
           ? `Cross-asset regime is ${regime.replace('_', '-').toLowerCase()}; BTC ${btcChange24h >= 0 ? 'bid' : 'offered'} on the day.`
           : `Tokenized equity — NDX ${macro.ndx?.changePct != null ? `${macro.ndx.changePct >= 0 ? '+' : ''}${macro.ndx.changePct}%` : 'flat'} ${confirms ? 'agrees with' : 'fights'} the ${symbol} tape.`,
         live: true,
+        replay: Boolean(macro.replay),
         stale: Boolean(macro.stale),
+      },
+    }
+  }
+  // Live server context or replay without a macro tape: neutral, not seeded.
+  if (liveOrReplay) {
+    return {
+      skill: 'macro-analyst',
+      title: `Macro · neutral · ${ctx.replay ? 'regime not reconstructible' : 'macro feed unavailable'}`,
+      confidence: 0.5,
+      excerpt: `Held neutral — ${ctx.replay ? 'no benchmark tape aligned to this bar' : 'cross-asset feed unavailable this cycle'}${btcTxt}.`,
+      source: ctx.replay ? 'historical replay' : 'live context · macro missing',
+      data: {
+        cryptoRegime: 'NEUTRAL', btcChange24h, dxy: null, ratesRegime: null, confirms: false,
+        note: 'Macro regime unavailable — held neutral.',
+        neutral: true, live: false,
       },
     }
   }
@@ -901,7 +945,8 @@ export function synthesizeSignal(symbol, market, skills, prefs) {
   const flowRaw = 0.5 + imb * 0.15 + (mi.data.volumeZ > 1 ? 0.12 * Math.sign(market.change24h || 0) : 0)
   const techRaw = ta.data.trend === 'UP' ? 0.65 : ta.data.trend === 'DOWN' ? 0.35 : 0.5
   const sentRaw = Number.isFinite(sen.data.score) ? sen.data.score : 0.5
-  const macroRaw = mac.data.live
+  const macroRaw = mac.data.neutral ? 0.5
+    : mac.data.live
     ? (mac.data.cryptoRegime === 'RISK_ON' ? 0.65 : mac.data.cryptoRegime === 'RISK_OFF' ? 0.35 : 0.5)
     : (mac.data.confirms ? 0.62 : 0.4)
   const w = p.weights
@@ -1496,155 +1541,469 @@ function suggestExecution({ symbol, market, signal, memory, invalidation }) {
 
 /* ---------------------------------------------- Thesis Lab (stress-test any) */
 
-/** Stress-test an arbitrary trader-submitted thesis (free text). */
-export function stressTestThesis({ thesis, memory, universe = DEMO_UNIVERSE, context = {} }) {
-  const asset = inferAsset(thesis) || 'BTC'
+/**
+ * Direction cues in trader English. Each entry is [pattern, weight]. Explicit
+ * position language ("long X", "I'm short", "buy") outweighs descriptive words
+ * ("higher", "breakdown"). Horizon phrases are excluded: "short-term" and
+ * "long-dated" say nothing about the side of the trade.
+ */
+const LONG_CUES = [
+  [/^\s*(?:i'?m\s+|we'?re\s+)?long\b(?![\s-]*(?:term|dated|run|haul|time|ago|way|story|history))/, 3],
+  [/\b(?:i'?m|i am|we'?re|we are|go|going|get|getting|stay|staying|be|being|bias(?:ed)?)\s+long\b(?![\s-]*(?:term|dated))/, 3],
+  [/\blong\b(?![\s-]*(?:term|dated|run|haul|time|ago|way|story|history|enough|before|after|as))/, 2],
+  [/\bbuy(?:ing|s)?\b|\bbought\b/, 2],
+  [/\baccumulat\w*|\badd(?:ing)?\s+(?:to|more)\b/, 2],
+  [/\bbullish\b|\bbull case\b/, 2],
+  [/\bshort squeeze\b/, 2],
+  [/\bcalls?\b(?!\s+(?:it|for|out))/, 1],
+  [/\bupside\b|\bhigher\b|\brall(?:y|ies|ying)\b|\brip(?:s|ping)?\b|\bbreak(?:s|ing)?\s*out\b|\bbreakout\b|\bmoon\w*|\brebound\w*|\bbounce\w*|\brecover\w*|\bre-?rat(?:e|ing)\b|\bundervalued\b|\boversold\b|\boverdone\b|\boutperform\w*|\bgo(?:es|ing)? up\b|\bmove(?:s)? up\b|\bgrind(?:s|ing)? higher\b/, 1],
+]
+const SHORT_CUES = [
+  [/^\s*(?:i'?m\s+|we'?re\s+)?short\b(?![\s-]*(?:term|dated|lived|squeeze))/, 3],
+  [/\b(?:i'?m|i am|we'?re|we are|go|going|get|getting|stay|staying|be|being|bias(?:ed)?)\s+short\b(?![\s-]*(?:term|dated|lived|squeeze))/, 3],
+  [/\bshort(?:ing)?\b(?![\s-]*(?:term|dated|lived|squeeze|interest|seller|sellers|covering|window|run|while|answer|list))/, 2],
+  [/\bsell(?:ing|s)?\b(?![\s-]*(?:off|side|-side))|\bsold\b/, 2],
+  [/\bbearish\b|\bbear case\b/, 2],
+  [/\bputs?\b(?!\s+(?:it|in|on|out|up|together|the))/, 1],
+  [/\bdownside\b|\blower\b|\bdump\w*|\bcrash\w*|\bfade\b|\bfading\b|\bbreak(?:s|ing)?\s*down\b|\bbreakdown\b|\broll(?:s|ing)? over\b|\bovervalued\b|\boverbought\b|\bunderperform\w*|\bgo(?:es|ing)? down\b|\bdrop(?:s|ping)?\b|\bfall(?:s|ing)?\b|\bdeclin\w*|\bsell-?off\b|\bpuke\w*|\btop(?:ped|ping)? out\b/, 1],
+]
+const NEGATION = /\b(?:not|no|never|nor|without|isn'?t|aren'?t|wasn'?t|won'?t|don'?t|doesn'?t|didn'?t|can'?t|cannot|unlikely|hardly)\b|n't\b/
+
+function cueMatches(text, cues, side) {
+  const out = []
+  for (const [re, weight] of cues) {
+    for (const m of text.matchAll(new RegExp(re.source, 'gi'))) {
+      if (!m[0].trim()) continue
+      out.push({ start: m.index, end: m.index + m[0].length, weight, side, phrase: m[0].trim() })
+    }
+  }
+  return out
+}
+
+/**
+ * Read a free-text thesis: which asset, which side, over what horizon, with
+ * what stated conviction, and any explicit stop / target the trader gave.
+ * Nothing is guessed silently — a missing asset or side comes back as
+ * `needs` so the UI can ask instead of testing the wrong trade.
+ */
+export function parseThesis(text, { preferences = {} } = {}) {
+  const raw = String(text || '').replace(/^\s*\/(?:thesis|challenge)\s+/i, '').trim()
+  const lower = raw.toLowerCase()
+
+  // Assets in the order the trader wrote them ("long AMD vs NVDA" → AMD).
+  const positions = []
+  for (const sym of findTickers(raw)) {
+    const idx = raw.search(new RegExp(`(^|[^A-Za-z0-9$])\\$?${sym}(?![A-Za-z0-9])`, AMBIGUOUS_TICKERS.has(sym) ? '' : 'i'))
+    positions.push([sym, idx < 0 ? Infinity : idx])
+  }
+  for (const a of DEMO_UNIVERSE) {
+    if (positions.some(([s]) => s === a.symbol)) continue
+    const name = a.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = raw.match(new RegExp(`(^|[^A-Za-z0-9])${name}(?![A-Za-z0-9])`, AMBIGUOUS_NAMES.has(a.name) ? '' : 'i'))
+    if (m) positions.push([a.symbol, m.index])
+  }
+  positions.sort((x, y) => x[1] - y[1])
+  const assets = positions.map(([s]) => s)
+  const asset = assets[0] || null
+
+  // Side: keep the strongest non-overlapping cue at each span; a negation in
+  // the words before a cue flips it ("not bullish", "don't think it goes higher").
+  const all = [...cueMatches(lower, LONG_CUES, 'LONG'), ...cueMatches(lower, SHORT_CUES, 'SHORT')]
+    .sort((a, b) => b.weight - a.weight || (b.end - b.start) - (a.end - a.start))
+  const kept = []
+  for (const c of all) if (!kept.some(k => c.start < k.end && k.start < c.end)) kept.push(c)
+  let longScore = 0, shortScore = 0
+  const cues = []
+  for (const c of kept.sort((a, b) => a.start - b.start)) {
+    // Negation scope: up to five words back, never across a clause break.
+    const clause = lower.slice(0, c.start).split(/[.,;!?]|\bbut\b|\bhowever\b|\bthough\b/).pop()
+    const before = clause.split(/\s+/).filter(Boolean).slice(-5).join(' ')
+    const negated = NEGATION.test(before)
+    const side = negated ? (c.side === 'LONG' ? 'SHORT' : 'LONG') : c.side
+    if (side === 'LONG') longScore += c.weight; else shortScore += c.weight
+    cues.push({ phrase: negated ? `${before.split(' ').pop()} ${c.phrase}` : c.phrase, side, weight: c.weight })
+  }
+  const direction = longScore > shortScore ? 'LONG' : shortScore > longScore ? 'SHORT' : null
+
+  // Horizon: explicit phrases first, then the trader's Settings, then swing.
+  const horizon = /\b(intraday|today|scalp|this session|into the close|day[- ]trade)\b/.test(lower) ? 'INTRADAY'
+    : /\b(long[\s-]term|months?|quarters?|years?|into 20\d\d|multi[- ]?(?:week|month)|position trade|secular|cycle)\b/.test(lower) ? 'POSITION'
+    : /\b(this week|next week|few days|overnight|into (?:the )?(?:print|earnings|open|close|fomc|cpi|report)|swing|couple of (?:days|weeks)|weeks?)\b/.test(lower) ? 'SWING'
+    : ['INTRADAY', 'SWING', 'POSITION'].includes(String(preferences?.horizon || '').toUpperCase()) ? String(preferences.horizon).toUpperCase()
+    : 'SWING'
+  const horizonDays = horizon === 'INTRADAY' ? 1 : horizon === 'POSITION' ? 30 : 5
+  // Earnings timing: "into the print" ends at the event; "through earnings" holds across it.
+  const earningsIntent = /\b(?:through|over|across|hold(?:ing)? (?:into and )?through)\s+(?:the\s+)?(?:print|earnings|report|results)\b/.test(lower) ? 'THROUGH'
+    : /\b(?:into|ahead of|before|run[- ]up (?:in)?to)\s+(?:the\s+)?(?:print|earnings|report|results)\b/.test(lower) ? 'INTO'
+    : null
+
+  // Stated conviction: "70% confident", "conviction 60%", "high conviction".
+  let conviction = null
+  const pctConv = lower.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:confident|confidence|conviction|sure|certain|probability|odds|chance)/)
+    || lower.match(/(?:confidence|conviction|probability|odds)\s*(?:of|at|is|=|:)?\s*(\d{1,3}(?:\.\d+)?)\s*%/)
+  if (pctConv) conviction = Number(pctConv[1]) / 100
+  else if (/\b(high|strong) conviction\b/.test(lower)) conviction = 0.7
+  else if (/\b(low|weak|small) conviction\b/.test(lower)) conviction = 0.4
+  if (conviction != null) conviction = Math.max(0.05, Math.min(0.95, conviction))
+
+  // Explicit levels. Bare "to" is ignored ("into 2027"); "to $300" counts.
+  const num = (m) => m ? Number(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1) : null
+  const target = num(lower.match(/(?:price target|target|tp|pt|take[- ]profit|objective|towards?\s+\$|to\s+\$)\s*(?:of|at|is|=|:|near|around)?\s*\$?\s*(\d[\d,]*(?:\.\d+)?)(k)?\b/))
+  const stop = num(lower.match(/(?:stop[- ]?loss|stop|sl|invalidat\w*|cut (?:it )?(?:at|below|above|under|over))\s*(?:at|is|of|=|:|below|above|under|over|near|around)?\s*\$?\s*(\d[\d,]*(?:\.\d+)?)(k)?\b/))
+
+  const rationaleMatch = raw.match(/\b(?:because|since|given|as|on the back of|due to|thanks to|driven by)\b\s+(.+)/i) || raw.match(/[—–:]\s*(.+)/)
+  const rationale = rationaleMatch
+    ? rationaleMatch[1]
+        .replace(/[,.;]?\s*(?:with\s+(?:a\s+)?)?(?:price target|target|tp|pt|take[- ]profit|stop[- ]?loss|stop|sl|invalidat\w*)\b[^,.;]*/gi, '')
+        .replace(/[,.;]?\s*\d{1,3}(?:\.\d+)?\s*%\s*(?:confident|confidence|conviction|sure|certain)\b/gi, '')
+        .replace(/\s+/g, ' ').replace(/[\s,;—–-]+$/, '').trim().slice(0, 240) || null
+    : null
+
+  const needs = []
+  if (!asset) needs.push('asset')
+  if (!direction) needs.push('direction')
+  return {
+    text: raw,
+    asset,
+    alsoMentioned: assets.slice(1, 4),
+    direction,
+    cues,
+    horizon,
+    horizonDays,
+    earningsIntent,
+    conviction,
+    target,
+    stop,
+    rationale,
+    needs,
+    unknownNames: asset ? [] : uncoveredAssetCandidates(raw).slice(0, 3),
+  }
+}
+
+/** Human message for a thesis that cannot be tested as written. */
+export function thesisNeedsMessage(parsed) {
+  if (parsed.needs.includes('asset')) {
+    const unknown = parsed.unknownNames?.[0]
+    return unknown
+      ? `"${unknown}" isn't a Bitget-listed asset in this desk's coverage. Name a tokenized stock (e.g. NVDA, TSLA, PLTR) or a crypto major.`
+      : 'Which asset? Name a Bitget tokenized stock (e.g. NVDA, TSLA, PLTR) or a crypto major in your thesis.'
+  }
+  if (parsed.needs.includes('direction')) {
+    return `Which side of ${parsed.asset} are you on? Say "long ${parsed.asset} because…" or "short ${parsed.asset} because…", or pick Long / Short.`
+  }
+  return null
+}
+
+const logit = (p) => Math.log(p / (1 - p))
+const sigmoid = (x) => 1 / (1 + Math.exp(-x))
+const pctTxt = (f, d = 1) => `${f >= 0 ? '+' : ''}${(f * 100).toFixed(d)}%`
+
+/**
+ * Stress-test a trader's free-text thesis against the live skill pack.
+ *
+ *   1. Parse asset / side / horizon / conviction / stop / target.
+ *   2. Run the five Bitget-signal skills on the real tape (live context).
+ *   3. File every read as supporting, fighting or neutral relative to the
+ *      trader's side — and keep its strength.
+ *   4. Confidence walk: start from the trader's stated conviction (50% when
+ *      none is given) and move in log-odds by each read's strength, then by
+ *      the stress tests that break the trade plan. Evidence can raise OR
+ *      lower conviction; every step is returned so the delta is auditable.
+ *   5. Stress tests are sized from the asset's own Bitget candle history
+ *      (median daily range, worst 24h, largest 1h gap, measured beta vs the
+ *      benchmark) when the server supplies it, from hourly ATR otherwise.
+ *
+ * `direction` overrides the parsed side (UI Long/Short toggle). Throws when
+ * the asset or side is missing — callers check `parseThesis().needs` first.
+ */
+export function stressTestThesis({ thesis, memory, universe = DEMO_UNIVERSE, context = {}, direction: forcedDirection = null }) {
+  const prefs = memory?.preferences || {}
+  const parsed = parseThesis(thesis, { preferences: prefs })
+  if (forcedDirection === 'LONG' || forcedDirection === 'SHORT') {
+    parsed.direction = forcedDirection
+    parsed.directionSource = 'selected'
+    parsed.needs = parsed.needs.filter(n => n !== 'direction')
+  } else {
+    parsed.directionSource = 'parsed'
+  }
+  if (parsed.needs.length) {
+    const err = new Error(thesisNeedsMessage(parsed))
+    err.code = parsed.needs.includes('asset') ? 'THESIS_NO_ASSET' : 'THESIS_NO_DIRECTION'
+    err.parsed = parsed
+    throw err
+  }
+
+  const asset = parsed.asset
+  const direction = parsed.direction
+  const d = direction === 'LONG' ? 1 : -1
   const market = universe.find(u => u.symbol === asset) || DEMO_UNIVERSE.find(u => u.symbol === asset)
   const skills = runSkillPack(asset, market, { ...context, news: context.newsBySymbol?.[asset] || context.news })
-  const signal = synthesizeSignal(asset, market, skills, memory?.preferences)
-  const direction = /(short|down|bear|fade|sell|crash|puke|breakdown)/i.test(thesis) ? 'SHORT'
-                  : /(long|up|bull|follow|buy|rip|breakout|higher|moon)/i.test(thesis) ? 'LONG'
-                  : signal.direction === 'FLAT' ? 'LONG' : signal.direction
-  // Prior confidence: on live data, derived from how well the real composite
-  // score agrees with the trader's claimed direction; seeded otherwise.
-  const agreement = direction === 'SHORT' ? 1 - signal.composite : signal.composite
-  const confidenceBefore = market.live
-    ? Number(Math.min(0.88, Math.max(0.3, 0.3 + agreement * 0.55)).toFixed(2))
-    : Number((0.6 + rand(thesis, 'before') * 0.2).toFixed(2))
-  const supporting = []
-  const contradicting = []
+  const signal = synthesizeSignal(asset, market, skills, prefs)
+  const isCrypto = market.class === 'crypto'
+  const live = Boolean(market.live)
+  // "Long PLTR into earnings": the horizon is the real time to the print.
+  const earnings = !isCrypto ? context.earnings : null
+  if (parsed.earningsIntent && earnings?.daysToNext != null) {
+    parsed.horizonDays = Math.max(1, earnings.daysToNext + (parsed.earningsIntent === 'THROUGH' ? 1 : 0))
+    parsed.horizon = parsed.horizonDays <= 1 ? 'INTRADAY' : parsed.horizonDays > 10 ? 'POSITION' : 'SWING'
+  }
 
   const news = skills.find(s => s.skill === 'news-briefing')
   const mi   = skills.find(s => s.skill === 'market-intel')
   const ta   = skills.find(s => s.skill === 'technical-analysis')
   const sen  = skills.find(s => s.skill === 'sentiment-analyst')
   const mac  = skills.find(s => s.skill === 'macro-analyst')
+  const persona = personaWeights(prefs).weights
+  const meanW = (persona.news + persona.flow + persona.tech + persona.sent + persona.macro) / 5
 
-  // Each skill's lean (+1 up / −1 down / 0 neutral) is filed relative to the
-  // THESIS direction, and the claim text states the fact rather than a verdict.
-  // The prior version filed "Flow does not confirm thesis" under supporting and
-  // "Catalyst supports downside" (with an UP-bias evidence line) under
-  // contradicting, because the claim copy and the condition were decoupled.
-  const dir = direction === 'LONG' ? 1 : -1
-  const file = (lean, source, claim, evidence) => {
-    if (lean === 0) return contradicting.push({ source, claim: `${claim} — no confirmation either way`, evidence })
-    ;(lean === dir ? supporting : contradicting).push({ source, claim: `${claim} — ${lean === dir ? 'agrees with' : 'fights'} the ${direction.toLowerCase()}`, evidence })
-  }
+  /* ---- evidence, filed relative to the thesis side ---------------------- */
+  const reads = []
+  const read = (source, lean, strength, claim, evidence, weightKey) => reads.push({
+    source, lean, strength: Number(Math.max(0, Math.min(1, strength)).toFixed(2)), claim, evidence,
+    weight: (persona[weightKey] ?? meanW) / meanW,
+  })
+
   if (news.data.live && news.data.newsCounts) {
     const c = news.data.newsCounts
-    file(Math.sign((c.up || 0) - (c.down || 0)), 'news-briefing', `Wire tape is ${c.up > c.down ? 'bullish' : c.down > c.up ? 'bearish' : 'mixed'}`, `${c.up || 0}↑ / ${c.down || 0}↓ / ${c.mixed || 0} mixed · ${news.data.catalyst}`)
-  } else {
-    file(news.data.beat ? 1 : 0, 'news-briefing', news.data.beat ? 'Catalyst is constructive' : 'Catalyst is mixed', news.data.expectationGap || news.data.catalyst)
+    const total = (c.up || 0) + (c.down || 0) + (c.mixed || 0)
+    if (total === 0) read('news-briefing', 0, 0, 'No symbol-tagged headline on the live wire', 'nothing on the wire confirms or contradicts the thesis yet', 'news')
+    else read('news-briefing', Math.sign((c.up || 0) - (c.down || 0)), (Math.abs((c.up || 0) - (c.down || 0)) / Math.max(4, total)) * 2 * news.confidence,
+      `Live wire is ${c.up > c.down ? 'bullish' : c.down > c.up ? 'bearish' : 'split'}`, `${c.up || 0}↑ / ${c.down || 0}↓ / ${c.mixed || 0} mixed · latest: ${String(news.data.catalyst || '').slice(0, 90)}`, 'news')
+  } else if (!news.data.live) {
+    read('news-briefing', news.data.beat ? 1 : 0, news.data.beat ? 0.5 : 0, news.data.beat ? 'Catalyst read is constructive' : 'Catalyst read is mixed', news.data.expectationGap || news.data.catalyst, 'news')
   }
-  const imb = Number.isFinite(mi.data.depthImbalance) ? mi.data.depthImbalance : null
-  if (imb != null && Math.abs(imb) >= 0.15) file(imb > 0 ? 1 : -1, 'market-intel', imb > 0 ? 'Book is bid-heavy' : 'Book is offer-heavy', `imbalance ${(imb * 100).toFixed(1)}% · vol z ${mi.data.volumeZ}`)
-  else if (mi.data.volumeZ > 1) file(Math.sign(market.change24h || 0), 'market-intel', 'Volume anomaly behind the day\'s move', `z ${mi.data.volumeZ}`)
-  else file(0, 'market-intel', 'Flow is inside its normal envelope', `z ${mi.data.volumeZ}`)
-  file(ta.data.trend === 'UP' ? 1 : ta.data.trend === 'DOWN' ? -1 : 0, 'technical-analysis', `Trend is ${String(ta.data.trend || 'n/a').toLowerCase()}`, `EMA20 ${ta.data.ema20}, RSI ${ta.data.rsi}`)
-  file(sen.data.tone === 'POSITIVE' ? 1 : sen.data.tone === 'NEGATIVE' ? -1 : 0, 'sentiment-analyst', `Sentiment is ${String(sen.data.tone || 'neutral').toLowerCase()}`,
-    sen.data.gauge === 'VIX' ? `VIX-derived fear gauge ${sen.data.fearGreed}/100` : `fear/greed ${sen.data.fearGreed ?? '—'} · crowding ${sen.data.crowding}`)
-  const regime = mac.data.cryptoRegime
-  file(regime === 'RISK_ON' ? 1 : regime === 'RISK_OFF' ? -1 : 0, 'macro-analyst', `Cross-asset regime is ${String(regime || 'neutral').replace('_', '-').toLowerCase()}`,
-    mac.data.live ? `VIX ${mac.data.vix ?? '—'} · DXY ${mac.data.dxy ?? '—'} · rates ${String(mac.data.ratesRegime || '').replace(/_/g, ' ').toLowerCase()}` : `rates ${mac.data.ratesRegime}`)
 
-  // Active contradictions cost more than neutral "no confirmation" reads.
-  const fights   = contradicting.filter(e => /— fights the/.test(e.claim)).length
-  const neutrals = contradicting.length - fights
-  const confidenceAfter = Number(Math.max(0.15, confidenceBefore - fights * 0.07 - neutrals * 0.03).toFixed(2))
+  const imb = Number.isFinite(mi.data.depthImbalance) ? mi.data.depthImbalance : null
+  if (imb != null && Math.abs(imb) >= 0.15) read('market-intel', Math.sign(imb), Math.min(1, Math.abs(imb) * 2), imb > 0 ? 'Order book is bid-heavy' : 'Order book is offer-heavy', `depth imbalance ${(imb * 100).toFixed(1)}%`, 'flow')
+  else if (mi.data.volumeZ != null && mi.data.volumeZ > 1 && market.change24h) read('market-intel', Math.sign(market.change24h), Math.min(1, 0.3 + (mi.data.volumeZ - 1) / 2), `Volume is ${mi.data.volumeZ.toFixed(1)}σ above normal behind a ${pctTxt(market.change24h / 100)} day`, `24h volume z-score ${mi.data.volumeZ}`, 'flow')
+  else read('market-intel', 0, 0, 'Flow is inside its normal envelope', `volume z ${mi.data.volumeZ ?? '—'}`, 'flow')
+
+  const trend = ta.data.trend
+  read('technical-analysis', trend === 'UP' ? 1 : trend === 'DOWN' ? -1 : 0, trend === 'SIDE' ? 0 : ta.confidence,
+    `1h trend is ${trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : 'sideways'}`, `price ${fmtPrice(market.price)} · EMA20 ${fmtPrice(ta.data.ema20)} · EMA50 ${fmtPrice(ta.data.ema50)}`, 'tech')
+  const rsi = Number(ta.data.rsi)
+  if (Number.isFinite(rsi) && (rsi >= 70 || rsi <= 30)) {
+    // Stretched momentum argues against chasing in its own direction.
+    read('technical-analysis', rsi >= 70 ? -1 : 1, 0.35, rsi >= 70 ? `RSI ${rsi.toFixed(0)} — overbought` : `RSI ${rsi.toFixed(0)} — oversold`, rsi >= 70 ? 'stretched upside momentum tends to mean-revert' : 'washed-out momentum tends to bounce', 'tech')
+  }
+  const ch7 = ta.data.change7d ?? market.change7d
+  if (Number.isFinite(ch7) && Math.abs(ch7) >= 3) read('technical-analysis', Math.sign(ch7), 0.4, `${pctTxt(ch7 / 100)} over 7 days`, 'multi-day momentum', 'tech')
+  const res = Number(ta.data.resistance), sup = Number(ta.data.support)
+  const hourlyAtr = (market.indicators?.atrPct ?? market.atrPct) / 100
+  if (direction === 'LONG' && res > market.price && (res - market.price) / market.price < 2 * hourlyAtr) read('technical-analysis', -1, 0.3, `Pressing 48h resistance ${'$' + fmtPrice(res)}`, `${pctTxt((res - market.price) / market.price, 2)} of headroom`, 'tech')
+  if (direction === 'SHORT' && sup < market.price && (market.price - sup) / market.price < 2 * hourlyAtr) read('technical-analysis', 1, 0.3, `Sitting on 48h support ${'$' + fmtPrice(sup)}`, `${pctTxt((sup - market.price) / market.price, 2)} to the floor`, 'tech')
+
+  if (sen.data.neutral) read('sentiment-analyst', 0, 0, 'Sentiment gauge unavailable', 'held neutral this cycle', 'sent')
+  else read('sentiment-analyst', sen.data.tone === 'POSITIVE' ? 1 : sen.data.tone === 'NEGATIVE' ? -1 : 0, sen.data.tone === 'NEUTRAL' ? 0 : Math.abs((sen.data.score ?? 0.5) - 0.5) * 2 * sen.confidence + 0.2,
+    `Sentiment is ${String(sen.data.tone || 'neutral').toLowerCase()}`, sen.data.gauge === 'VIX' ? `VIX ${sen.data.vix} → equity fear gauge ${sen.data.fearGreed}/100` : `fear/greed ${sen.data.fearGreed ?? '—'} · crowding ${sen.data.crowding}`, 'sent')
+
+  const regime = mac.data.cryptoRegime
+  if (mac.data.neutral) read('macro-analyst', 0, 0, 'Macro regime unavailable', 'held neutral this cycle', 'macro')
+  else read('macro-analyst', regime === 'RISK_ON' ? 1 : regime === 'RISK_OFF' ? -1 : 0, regime === 'NEUTRAL' ? 0 : mac.confidence * Math.min(1.3, Math.max(0.5, market.beta || 1)) / 1.3 + 0.1,
+    `Cross-asset regime is ${String(regime || 'neutral').replace('_', '-').toLowerCase()}`,
+    mac.data.live ? `VIX ${mac.data.vix ?? '—'} · S&P ${mac.data.spxChangePct != null ? pctTxt(mac.data.spxChangePct / 100, 2) : '—'} · DXY ${mac.data.dxy ?? '—'}` : `rates ${String(mac.data.ratesRegime || '—').replace(/_/g, ' ').toLowerCase()}`, 'macro')
+
+  for (const r of reads) {
+    r.stance = r.lean === 0 ? 'NEUTRAL' : r.lean === d ? 'SUPPORTS' : 'FIGHTS'
+    r.claim = r.lean === 0 ? `${r.claim} — no confirmation either way` : `${r.claim} — ${r.lean === d ? 'backs' : 'fights'} the ${direction.toLowerCase()}`
+  }
+  const supporting = reads.filter(r => r.stance === 'SUPPORTS').sort((a, b) => b.strength - a.strength)
+  const fighting = reads.filter(r => r.stance === 'FIGHTS').sort((a, b) => b.strength - a.strength)
+  const neutral = reads.filter(r => r.stance === 'NEUTRAL')
+
+  /* ---- risk geometry: stop, target, realised volatility ------------------ */
+  const price = market.price
+  const candles = Array.isArray(context.history?.candles) ? context.history.candles : null
+  const prof = candles ? volatilityProfile(candles) : null
+  const measuredBeta = candles && Array.isArray(context.history?.benchmark) ? betaVs(candles, context.history.benchmark) : null
+  const beta = measuredBeta ?? market.beta ?? 1
+  // Daily range from real candles; else hourly ATR × √24 (≈ one session's range).
+  const dailyRange = prof?.dailyRange ?? Math.max(0.005, hourlyAtr * Math.sqrt(24))
+  const sigmaDay = dailyRange / 1.6                 // expected high-low range of a random walk ≈ 1.6σ
+  const spread = Number.isFinite(mi.data.spreadBps) ? mi.data.spreadBps / 10000 : 0.0005
+  const friction = 0.002 + Math.max(spread, 0.0002)
+
+  const validStop = parsed.stop && Math.abs(parsed.stop - price) / price <= 0.5 && (direction === 'LONG' ? parsed.stop < price : parsed.stop > price)
+  let stopPx, stopSource
+  if (validStop) { stopPx = parsed.stop; stopSource = 'yours' }
+  else {
+    // A structural level only counts when it sits outside one day's noise.
+    const level = direction === 'LONG' ? sup : res
+    const dist = Number.isFinite(level) ? Math.abs(price - level) / price : NaN
+    const fallbackDist = (parsed.horizon === 'INTRADAY' ? 1.25 : parsed.horizon === 'POSITION' ? 3.2 : 1.6) * sigmaDay
+    if (Number.isFinite(dist) && dist >= sigmaDay && dist <= 2.5 * dailyRange && (direction === 'LONG' ? level < price : level > price)) {
+      stopPx = direction === 'LONG' ? level * (1 - 0.15 * sigmaDay) : level * (1 + 0.15 * sigmaDay)
+      stopSource = direction === 'LONG' ? 'just below 48h support' : 'just above 48h resistance'
+    } else {
+      stopPx = price * (1 - d * fallbackDist)
+      stopSource = `${(fallbackDist / sigmaDay).toFixed(1)}σ of daily volatility away`
+    }
+  }
+  const stopDist = Math.abs(stopPx - price) / price
+  const validTarget = parsed.target && Math.abs(parsed.target - price) / price <= 3 && (direction === 'LONG' ? parsed.target > price : parsed.target < price)
+  const targetPx = validTarget ? parsed.target : price * (1 + d * 2 * stopDist)
+  const targetDist = Math.abs(targetPx - price) / price
+  const targetZ = targetDist / (sigmaDay * Math.sqrt(parsed.horizonDays))
+
+  /* ---- stress tests: shocks sized from the asset's own history ----------- */
+  const histTxt = prof ? `${prof.days}d of Bitget 1h candles` : null
+  const stopTxt = `${pctTxt(-stopDist, 1)} stop`
+  // A shock either stays inside the stop (thesis intact) or the stop does its
+  // job and caps the loss — "stopped out" is an outcome, not a failure.
+  const hit = (move) => ({ expectedPnlPct: Number((-Math.min(move, stopDist) - friction).toFixed(4)), survivable: move < stopDist, result: move < stopDist ? 'HOLDS' : 'STOPPED OUT' })
+  const stressTests = []
+  stressTests.push({ name: 'Normal day against you', shock: `${pctTxt(-sigmaDay)} (a 1σ day for ${asset})`, ...hit(sigmaDay),
+    basis: prof ? `1σ daily move ≈ median daily range ÷ 1.6, from ${histTxt}` : '1σ daily move from hourly ATR × √24 ÷ 1.6 (no candle history attached)' })
+  if (prof) {
+    const worst24 = direction === 'LONG' ? -prof.worstDown24h : prof.worstUp24h
+    stressTests.push({ name: 'Worst 24h in the sample', shock: `${pctTxt(-worst24)} close-to-close`, ...hit(worst24), basis: `worst adverse 24h move in ${histTxt}` })
+    const gap = direction === 'LONG' ? -prof.worstDown1h : prof.worstUp1h
+    stressTests.push({ name: 'Largest 1h gap against you', shock: `${pctTxt(-gap)} in a single hour`, expectedPnlPct: Number((-gap - friction).toFixed(4)), survivable: gap < stopDist, result: gap < stopDist ? 'HOLDS' : 'GAPS STOP',
+      basis: `largest single-hour adverse move in ${histTxt} — stops fill at the gap, not the level` })
+  }
+  const shockSize = isCrypto ? 0.05 : 0.03
+  const benchName = isCrypto ? 'BTC' : 'S&P 500'
+  const benchMove = beta * shockSize
+  stressTests.push({ name: `${benchName} ${direction === 'LONG' ? 'sell-off' : 'squeeze'}`, shock: `${benchName} ${pctTxt(-d * shockSize, 0)} → ${asset} ${pctTxt(-benchMove)} at β ${beta.toFixed(2)}`, ...hit(benchMove),
+    basis: measuredBeta != null ? `beta measured vs ${isCrypto ? 'BTC' : 'RSPY'} over ${histTxt}` : `reference beta ${Number(market.beta ?? 1).toFixed(2)} (not measured)` })
+  // Holding across the print is a binary event; exiting "into" it is not.
+  // Crypto-linked stocks (BTC treasuries, miners, exchanges) also carry BTC beta.
+  const btcCandles = !isCrypto && Array.isArray(context.history?.btc) ? context.history.btc : null
+  if (btcCandles && candles) {
+    const btcBeta = betaVs(candles, btcCandles)
+    if (btcBeta != null && Math.abs(btcBeta) >= 0.2) {
+      const btcMove = Math.abs(btcBeta) * 0.05
+      stressTests.push({ name: `BTC ${direction === 'LONG' ? 'sell-off' : 'squeeze'}`, shock: `BTC ${pctTxt(-d * Math.sign(btcBeta) * 0.05, 0)} → ${asset} ${pctTxt(-btcMove)} at β ${btcBeta.toFixed(2)}`, ...hit(btcMove),
+        basis: `beta measured vs BTCUSDT over ${histTxt}` })
+    }
+  }
+  const earningsInside = earnings?.daysToNext != null && (parsed.earningsIntent === 'THROUGH' || (parsed.earningsIntent !== 'INTO' && earnings.daysToNext < parsed.horizonDays))
+  const earningsNear = earnings?.daysToNext != null && !earningsInside && earnings.daysToNext <= parsed.horizonDays
+  const catalystMove = (earningsInside || earningsNear ? 2 : 1.5) * dailyRange
+  stressTests.push({ name: earningsInside || earningsNear ? `Earnings ${earnings.nextEarningsDate || `in ${earnings.daysToNext}d`}` : 'Adverse headline', shock: `${pctTxt(-catalystMove)} reaction`, ...hit(catalystMove),
+    basis: earningsInside ? `you hold across the print · reaction assumed 2× a normal day`
+      : earningsNear ? `the print lands as you exit — if you hold through it · reaction assumed 2× a normal day`
+      : 'headline shock assumed 1.5× a normal day' })
+  const squeezeCost = 0.002 + 3 * Math.max(spread, 0.0002)
+  stressTests.push({ name: 'Liquidity squeeze', shock: `spread ${(spread * 10000).toFixed(1)} → ${(spread * 30000).toFixed(1)} bps`, expectedPnlPct: Number((-squeezeCost).toFixed(4)), survivable: squeezeCost < 0.25 * targetDist, result: squeezeCost < 0.25 * targetDist ? 'HOLDS' : 'COSTLY',
+    basis: `0.20% round-trip fees + 3× the ${Number.isFinite(mi.data.spreadBps) ? 'live' : 'assumed'} spread vs a ${pctTxt(targetDist)} target` })
+  stressTests.push({ name: 'Target reachable in horizon', shock: `${pctTxt(d * targetDist)} to ${'$' + fmtPrice(targetPx)} in ~${parsed.horizonDays}d`, expectedPnlPct: Number((targetDist - friction).toFixed(4)), survivable: targetZ <= 1.5, result: targetZ <= 1.5 ? 'REACHABLE' : 'STRETCH',
+    basis: `${targetZ.toFixed(1)}σ of ${parsed.horizonDays}-day volatility${validTarget ? ' · your target' : ' · 2R default target'}` })
+
+  /* ---- confidence walk ---------------------------------------------------- */
+  const K = 0.55
+  const prior = parsed.conviction ?? 0.5
+  let x = logit(prior)
+  const steps = []
+  const step = (label, dx) => {
+    if (!dx) return
+    const before = sigmoid(x)
+    x += dx
+    steps.push({ label, delta: Number((sigmoid(x) - before).toFixed(3)) })
+  }
+  for (const r of [...supporting, ...fighting]) step(`${r.source.replace(/-.*/, '')} · ${r.claim.replace(/ — .*/, '')}`, (r.lean === d ? 1 : -1) * r.strength * r.weight * K)
+  const normalDay = stressTests[0]
+  if (!normalDay.survivable) step(`Stop (${pctTxt(-stopDist)}) sits inside a normal day's range`, -0.35)
+  if (validTarget && targetZ > 2) step(`Your target needs a ${targetZ.toFixed(1)}σ move in ${parsed.horizonDays}d`, -0.25)
+  if (earningsInside) step('Binary earnings event inside the horizon', -0.15)
+  const confidenceBefore = Number(prior.toFixed(2))
+  const confidenceAfter = Number(Math.max(0.05, Math.min(0.95, sigmoid(x))).toFixed(2))
+
+  /* ---- verdict + narrative ----------------------------------------------- */
+  const verdict = confidenceAfter >= 0.6 && fighting.length <= 1 && normalDay.survivable ? 'SUPPORTS'
+    : confidenceAfter <= 0.4 || (fighting.length >= 3 && supporting.length <= 1) ? 'REFUTES'
+    : 'MIXED'
+
+  const deskAgrees = signal.direction === direction
+  const sideTxt = `${direction.toLowerCase()} ${asset}`
+  const brief = (r) => `${r.claim.replace(/ — .*/, '')} (${r.evidence})`
+  const steelman = supporting.length
+    ? `Strongest case for the ${sideTxt}: ${parsed.rationale ? `"${parsed.rationale}" — and the tape backs it: ` : ''}${supporting.slice(0, 3).map(brief).join('; ')}.${deskAgrees ? ` The desk's own engine leans the same way (composite ${signal.composite}).` : ''}`
+    : `No skill on the tape confirms the ${sideTxt} right now${parsed.rationale ? ` — the case rests on your catalyst: "${parsed.rationale}"` : ''}. For it to work, the evidence has to come to you: the 1h trend has to turn ${direction === 'LONG' ? 'up' : 'down'} and the ${isCrypto ? 'crypto' : 'equity'} regime has to stop leaning the other way.`
+  const failing = stressTests.filter(t => !t.survivable && t.name !== 'Target reachable in horizon')
+  const counterThesis = (fighting.length || failing.length)
+    ? `Strongest case against: ${fighting.length ? fighting.slice(0, 3).map(brief).join('; ') + '.' : 'no skill actively fights it, but the trade plan is fragile.'}${failing.length ? ` ${failing[0].name}: ${failing[0].shock} would ${failing[0].name === 'Liquidity squeeze' ? 'eat a large share of the target' : `breach the ${stopTxt}`}.` : ''}${!deskAgrees && signal.direction !== 'FLAT' ? ` The desk's engine reads ${asset} ${signal.direction} (composite ${signal.composite}).` : ''}`
+    : `The best argument against is absence of evidence: ${neutral.map(r => r.source.replace(/-.*/, '')).join(', ') || 'several feeds'} ${neutral.length === 1 ? 'is' : 'are'} silent, so the ${direction.toLowerCase()} leans on fewer confirmations than it looks.`
+
+  const ch7f = Number.isFinite(ch7) ? ch7 / 100 : null
+  const priced = ch7f != null && Math.sign(ch7f) === d && Math.abs(ch7f) >= 1.5 * dailyRange
+  const against = ch7f != null && Math.sign(ch7f) === -d && Math.abs(ch7f) >= 1.5 * dailyRange
+  const marketPricing = ch7f == null
+    ? 'Not enough history to judge how much of the view is priced.'
+    : priced
+      ? `${asset} is already ${pctTxt(ch7f)} over 7 days (${(Math.abs(ch7f) / dailyRange).toFixed(1)}× a normal day) with RSI ${Number.isFinite(rsi) ? rsi.toFixed(0) : '—'} — a good part of a ${direction === 'LONG' ? 'bullish' : 'bearish'} story looks priced; you'd be adding after the move.`
+      : against
+        ? `${asset} is ${pctTxt(ch7f)} over 7 days — the tape has priced the opposite of your view. You're early, which also means you're fighting the recent trend.`
+        : `${asset} is ${pctTxt(ch7f)} over 7 days with RSI ${Number.isFinite(rsi) ? rsi.toFixed(0) : '—'} — little of the thesis looks priced either way.`
+
+  const deltaPts = Math.round((confidenceAfter - confidenceBefore) * 100)
+  const biggest = failing[0]
+  const finalAssessment = `${verdict === 'SUPPORTS' ? 'Holds up' : verdict === 'REFUTES' ? 'Does not hold up' : 'Mixed'}: the evidence moves conviction ${Math.round(confidenceBefore * 100)}% → ${Math.round(confidenceAfter * 100)}% (${deltaPts >= 0 ? '+' : ''}${deltaPts} pts). `
+    + `${supporting.length} read${supporting.length === 1 ? '' : 's'} back it${supporting.length ? ` (${[...new Set(supporting.map(r => r.source.replace(/-.*/, '')))].join(', ')})` : ''}, ${fighting.length} fight${fighting.length === 1 ? 's' : ''} it${fighting.length ? ` (${[...new Set(fighting.map(r => r.source.replace(/-.*/, '')))].join(', ')})` : ''}. `
+    + (biggest ? `Biggest risk: ${biggest.name.toLowerCase()} — ${biggest.shock}. ` : `It survives every shock tested inside a ${stopTxt}. `)
+    + `Invalidation ${'$' + fmtPrice(stopPx)} (${stopSource}), target ${'$' + fmtPrice(targetPx)}. You own the size decision.`
 
   const ca = crossAssetRisk(market)
-  const stressTests = [
-    { name: 'Volatility shock (2× ATR)',            shock: `move ±${(market.atrPct * 2).toFixed(1)}%`,                    expectedPnlPct: -Number(((market.atrPct / 100) * 2).toFixed(3)),                                   survivable: (market.atrPct / 100) < 0.06 },
-    // The shock must be ADVERSE to the thesis: a risk-off session hurts a
-    // long, a risk-on rally hurts a short. (Previously a short was shown
-    // losing 3% in a risk-off session — the move that pays it.) Survivable
-    // only if the stop is wider than the ~3% hit.
-    { name: 'Cross-asset reversal',                 shock: direction === 'LONG' ? ca.shockLabel : ca.shortKiller,           expectedPnlPct: -0.03,                                                                              survivable: Math.max(0.015, market.atrPct / 100) >= 0.03 },
-    { name: 'Book pull (spread ×3)',                shock: `spread ${mi.data.spreadBps} → ${mi.data.spreadBps * 3} bps`,   expectedPnlPct: -Number(((mi.data.spreadBps * 3) / 10000).toFixed(4)),                              survivable: mi.data.spreadBps < 6 },
-    { name: 'Catalyst re-cut',                      shock: 'headline reversal within 24h',                                 expectedPnlPct: -0.04,                                                                              survivable: false },
-    { name: 'Sentiment blow-off',                   shock: `crowding → HIGH`,                                              expectedPnlPct: -0.025,                                                                             survivable: sen.data.crowding !== 'HIGH' },
-  ]
-
   const invalidation = {
-    price: direction === 'LONG' ? roundPx((market.price * (1 - Math.max(0.015, market.atrPct / 100))))
-         : roundPx((market.price * (1 + Math.max(0.015, market.atrPct / 100)))),
+    price: roundPx(stopPx),
+    source: stopSource,
     conditions: [
+      `${direction === 'LONG' ? '1h close below' : '1h close above'} ${'$' + fmtPrice(stopPx)} (${stopSource})`,
       direction === 'LONG' ? ca.longKiller : ca.shortKiller,
-      direction === 'LONG' ? 'Close < EMA20' : 'Close > EMA20',
       direction === 'LONG'
         ? `Desk composite falls below ${signal.persona?.bearThreshold ?? 0.485} (skill pack flips bearish)`
         : `Desk composite rises above ${signal.persona?.bullThreshold ?? 0.515} (skill pack flips bullish)`,
+      ...(earningsInside ? [`Earnings ${earnings.nextEarningsDate || ''} print against the ${direction.toLowerCase()}`.replace(/\s+/g, ' ')] : []),
     ],
   }
 
-  const marketPricing = mi.data.volumeZ > 1
-    ? 'Market appears to be pricing in the catalyst; late-follow risk elevated.'
-    : 'Market may not fully price the catalyst yet.'
-
   const analogs = (memory?.analogs || []).filter(a => a.asset === asset).slice(0, 3)
-
-  const verdict = confidenceAfter >= 0.6 && supporting.length >= 3 && fights === 0
-    ? 'SUPPORTS'
-    : fights >= 3 || (fights >= 2 && supporting.length === 0)
-    ? 'REFUTES'
-    : 'MIXED'
-
-  const finalAssessment = verdict === 'SUPPORTS'
-    ? `Thesis survives stress-test. Direction ${direction}, invalidation ${'$' + fmtPrice(invalidation.price)}. Trader still owns the size decision.`
-    : verdict === 'REFUTES'
-    ? `Thesis does not survive stress-test. Recommend sit-out or reformulate around a different catalyst.`
-    : `Thesis is mixed. Some evidence supports; some fights. Waiting for a stronger catalyst or trimmed size is reasonable.`
+  const toEvidence = (r) => ({ source: r.source, claim: r.claim, evidence: r.evidence, strength: r.strength })
 
   return {
     id: shortId('ths'),
-    thesis,
+    thesis: parsed.text,
     asset,
     direction,
     createdAt: new Date().toISOString(),
-    steelman: buildSteelman(direction, asset, news, mac),
-    counterThesis: buildCounterThesis(direction, asset, mi, sen),
+    parsed: {
+      direction, directionSource: parsed.directionSource, cues: parsed.cues.slice(0, 6), horizon: parsed.horizon, horizonDays: parsed.horizonDays,
+      earningsIntent: parsed.earningsIntent, earningsDate: earnings?.nextEarningsDate ?? null, earningsInDays: earnings?.daysToNext ?? null,
+      conviction: parsed.conviction, stop: validStop ? parsed.stop : null, target: validTarget ? parsed.target : null,
+      ignoredStop: parsed.stop && !validStop ? parsed.stop : null, ignoredTarget: parsed.target && !validTarget ? parsed.target : null,
+      rationale: parsed.rationale, alsoMentioned: parsed.alsoMentioned,
+    },
+    price: roundPx(price),
+    dataMode: live ? 'LIVE' : 'OFFLINE',
+    dataFreshness: live
+      ? `Live · Bitget ${pairLabel(asset, isCrypto)} tape${news.data.live ? ' + wire' : ''}${mac.data.live ? ' + macro' : ''}${prof ? ` + ${prof.days}d candle history` : ''}`
+      : 'Offline · seeded demo values — the adapter was unreachable, nothing here is market data',
+    steelman,
+    counterThesis,
     marketPricing,
-    supporting,
-    contradicting,
+    supporting: supporting.map(toEvidence),
+    fighting: fighting.map(toEvidence),
+    neutral: neutral.map(toEvidence),
+    // Legacy field (fights + silent reads) kept for saved-thesis readers.
+    contradicting: [...fighting, ...neutral].map(toEvidence),
     stressTests,
     invalidation,
+    target: roundPx(targetPx),
+    riskReward: Number((targetDist / stopDist).toFixed(2)),
+    volatility: { dailyRange: Number(dailyRange.toFixed(4)), beta: Number(beta.toFixed(2)), betaSource: measuredBeta != null ? 'measured' : 'reference', historyDays: prof?.days ?? null },
     analogs,
     verdict,
     confidenceBefore,
     confidenceAfter,
+    confidenceSteps: steps,
     finalAssessment,
+    desk: { direction: signal.direction, status: signal.status, composite: signal.composite, confidence: signal.confidence, netEdge: signal.netEdge, agrees: deskAgrees },
     signal,
     skills,
   }
 }
 
-function buildSteelman(direction, asset, news, macro) {
-  if (news.data.live) {
-    const c = news.data.newsCounts || {}
-    const bias = `${c.up || 0} bullish / ${c.down || 0} bearish / ${c.mixed || 0} mixed live headlines`
-    const macroNote = macro.data.live
-      ? (macro.data.confirms ? `the live cross-asset regime (${macro.data.cryptoRegime.replace('_', '-').toLowerCase()}, DXY ${macro.data.dxy ?? '—'}, VIX ${macro.data.vix ?? '—'}) agrees` : `the cross-asset regime is the main thing to beat`)
-      : (macro.data.confirms ? 'macro regime agrees' : 'the tape is stronger than macro')
-    return direction === 'LONG'
-      ? `${asset} moves higher: the live wire reads ${bias} with "${news.data.catalyst}" as the dominant story, and ${macroNote}.`
-      : `${asset} moves lower: the live wire reads ${bias} with "${news.data.catalyst}" as the dominant story, and ${macroNote}.`
-  }
-  const kernel = direction === 'LONG'
-    ? `${asset} moves higher because ${news.data.catalyst} is real and ${macro.data.confirms ? 'macro regime agrees' : 'the tape is stronger than macro'}.`
-    : `${asset} moves lower because ${news.data.catalyst} disappoints and ${macro.data.confirms ? 'the macro tail is against risk' : 'positioning is already stretched'}.`
-  return kernel
-}
-function buildCounterThesis(direction, asset, mi, sen) {
-  if (mi.data.live || sen.data.live) {
-    const flow = `live volume z ${mi.data.volumeZ ?? '—'}, spread ${mi.data.spreadBps ?? '—'}bps`
-    return direction === 'LONG'
-      ? `Entry quality is the weak point (${flow}, crowding ${sen.data.crowding}): if the move is already extended you are following, not front-running.`
-      : `Positioning and flow (${flow}, crowding ${sen.data.crowding}) can squeeze; a bounce against a fresh short is the base risk.`
-  }
-  return direction === 'LONG'
-    ? `The catalyst is already priced in (volume z ${mi.data.volumeZ}, crowding ${sen.data.crowding}); late-follow gives you a poor entry.`
-    : `Positioning is already short (crowding ${sen.data.crowding}); a squeeze against you is more likely than a fresh leg down.`
-}
+function pairLabel(asset, isCrypto) { return isCrypto ? `${asset}USDT` : `R${asset}USDT` }
 
 /* ------------------------------------------------------ Portfolio impact */
 
@@ -2006,7 +2365,16 @@ export class LocalNightwatchEngine {
 
   thesisTest(request) {
     const ctx = request.context || {}
-    return { thesisReport: stressTestThesis({ thesis: request.thesis || request.question, memory: ctx.memory, universe: ctx.universe || DEMO_UNIVERSE, context: ctx }) }
+    const thesis = request.thesis || request.question || ''
+    const direction = request.direction === 'LONG' || request.direction === 'SHORT' ? request.direction : null
+    // Ask instead of guessing: a thesis without an asset or a side is not
+    // testable, and defaulting (the old BTC fallback) tests a trade nobody made.
+    const parsed = parseThesis(thesis, { preferences: ctx.memory?.preferences })
+    const needs = parsed.needs.filter(n => !(n === 'direction' && direction))
+    if (needs.length) {
+      return { thesisReport: null, thesisError: { code: needs.includes('asset') ? 'THESIS_NO_ASSET' : 'THESIS_NO_DIRECTION', needs, asset: parsed.asset, message: thesisNeedsMessage({ ...parsed, needs }) } }
+    }
+    return { thesisReport: stressTestThesis({ thesis, memory: ctx.memory, universe: ctx.universe || DEMO_UNIVERSE, context: ctx, direction }) }
   }
 
   portfolioImpact(request) {

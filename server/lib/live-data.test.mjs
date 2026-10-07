@@ -169,13 +169,14 @@ test('DemoMarketData.tick leaves live rows untouched; sync adopts live rows', ()
 
 /* ---------- live thesis lab ---------- */
 
-test('stressTestThesis on live universe: monotonic confidence, real invalidation', () => {
+test('stressTestThesis on live universe: LIVE stamp, evidence-driven prose, real invalidation', () => {
   const universe = DEMO_UNIVERSE.map(u => u.symbol === 'BTC' ? liveMarket : u)
   const t = stressTestThesis({ thesis: 'Long BTC because ETF inflows are back', memory: null, universe, context: { news: realNews, macro: realMacro, btcChange24h: 1.3 } })
-  assert.ok(t.confidenceAfter <= t.confidenceBefore)
+  assert.equal(t.dataMode, 'LIVE')
   assert.equal(t.asset, 'BTC')
-  assert.ok(t.invalidation.price > 0)
-  assert.ok(t.steelman.includes('live wire') || t.steelman.includes('BTC'))
+  assert.ok(t.invalidation.price > 0 && t.invalidation.price < liveMarket.price)
+  assert.ok(t.steelman.includes('ETF inflows are back'), 'steelman builds on the trader rationale')
+  assert.ok(t.supporting.some(e => e.source === 'technical-analysis'), 'UP trend backs a long')
   const nb = t.skills.find(s => s.skill === 'news-briefing')
   assert.equal(nb.data.live, true)
 })

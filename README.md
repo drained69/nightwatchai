@@ -78,7 +78,7 @@ NIGHTWATCH AI is a browser-native AI research workbench built for **event-driven
 
 A trader types a question in plain English ("*Why is NVDA moving right now?*"). NIGHTWATCH invokes five Bitget-signal research skills against live Bitget market data, cross-venue perp positioning, macro tape, and a real-time news wire; synthesizes the evidence into a structured desk report with a directional verdict, supporting and contradicting evidence, invalidation levels, stress tests and a suggested execution plan; and hands the trader an APPROVE / REJECT / SIT-OUT decision. Nothing routes without an explicit per-order confirm.
 
-**Primary universe.** 73 tokenized U.S. stocks and index ETFs traded on Bitget as R-prefixed spot pairs (`RNVDAUSDT`, `RPLTRUSDT`, `RSPYUSDT`, …): mega-caps (`NVDA`, `TSLA`, `AAPL`, `MSFT`, `AMZN`, `GOOGL`, `META`), semis (`AMD`, `AVGO`, `TSM`, `MU`, `ARM`, …), software and internet (`PLTR`, `ORCL`, `NFLX`, `CRM`, `UBER`, …), crypto-linked equities (`COIN`, `MSTR`, `HOOD`, `CRCL`, `MARA`, …), banks and payments, consumer, healthcare, energy and defense names, plus `SPY` and `QQQ`. The list lives in `src/domain.js` (`EXTENDED_EQUITIES`). 8 crypto majors (`BTC`, `ETH`, `SOL`, `BNB`, `XRP`, `DOGE`, `AVAX`, `ADA`) are kept as a macro-regime and correlation set. A mapped pair that Bitget doesn't list is skipped automatically, and `/health` reports it under `universe.listing.missing`.
+**Primary universe.** 72 tokenized U.S. stocks and index ETFs traded on Bitget as R-prefixed spot pairs (`RNVDAUSDT`, `RPLTRUSDT`, `RSPYUSDT`, …): mega-caps (`NVDA`, `TSLA`, `AAPL`, `MSFT`, `AMZN`, `GOOGL`, `META`), semis (`AMD`, `AVGO`, `TSM`, `MU`, `ARM`, …), software and internet (`PLTR`, `ORCL`, `NFLX`, `CRM`, `UBER`, …), crypto-linked equities (`COIN`, `MSTR`, `HOOD`, `CRCL`, `MARA`, …), banks and payments, consumer, healthcare, energy and defense names, plus `SPY` and `QQQ`. The list lives in `src/domain.js` (`EXTENDED_EQUITIES`). 8 crypto majors (`BTC`, `ETH`, `SOL`, `BNB`, `XRP`, `DOGE`, `AVAX`, `ADA`) are kept as a macro-regime and correlation set. Every pair was checked against Bitget's `/api/v2/spot/public/symbols` list (stock tokens have a lowercase-`r` base coin such as `rNVDA`); a mapped pair Bitget later delists is skipped automatically, and `/health` reports it under `universe.listing.missing`.
 
 **What NIGHTWATCH is not.** Not an autonomous trading agent. Not a signal-only chart tool. Not a paper simulator with fabricated fills. Every price, every headline, every indicator is sourced from a real live provider; every fill on the paper book marks-to-market against the live Bitget WebSocket tape; every live order routes through Bitget's Unified Trading Account (UTA v3) into an isolated Agentic Account with a per-order confirm and a one-click kill switch.
 
@@ -92,7 +92,7 @@ Grouped by product pillar. Every row below is live in production.
 
 | Capability | Implementation |
 |---|---|
-| **81-asset universe** | 73 tokenized U.S. stocks and ETFs (Bitget R-pairs) + 8 crypto majors, all with real live spot ticker, 1h candles, 15-level orderbook. |
+| **80-asset universe** | 72 tokenized U.S. stocks and ETFs (Bitget R-pairs) + 8 crypto majors, all with real live spot ticker, 1h candles, 15-level orderbook. |
 | **Bitget public WebSocket** | `wss://ws.bitget.com/v2/ws/public` ticker channel subscribed to every mapped pair with auto-reconnect + 20-second heartbeat. Sub-second cadence; the tape shows a `BITGET WS` pill when the socket is fresh and falls back transparently to REST during reconnects. |
 | **Bitget public REST** | Ticker, candles (paged to ~2000 bars per asset), and 15-level orderbook. Retry with exponential backoff; stale-while-revalidate cache so transient outages degrade honestly. |
 | **Cross-venue perp positioning** | Binance + OKX + Bitget funding rates and open interest aggregated per asset with a per-venue table showing Bitget as the home venue. |
@@ -111,8 +111,8 @@ Grouped by product pillar. Every row below is live in production.
 | **LLM narration** | Qwen 3.8 via Bitget's hackathon endpoint (fallback chain: Qwen → xAI → Anthropic → OpenAI, first key wins) with word-boundary keyword heuristics as the offline fallback. |
 | **Analysis workbench** | `GET /analysis/{SYMBOL}` bundles ticker + indicators + orderbook + cross-venue positioning + macro + symbol-tagged news + earnings, then Qwen produces a four-part desk analysis (technical · flow · narrative · verdict) with concrete entry / stop / target / invalidation. |
 | **Signal accuracy ledger** | Every LONG / SHORT signal recorded with entry price, resolved against real forward price at an 8-hour horizon, aggregate hit-rate at `/signals/stats`. |
-| **Backtester** | Runs on cached real Bitget candles (deep-paged to ~2000 hourly bars per asset) with per-bar no-lookahead indicators; reports precision, recall, and lift. |
-| **Thesis Lab** | Trader submits any thesis in plain English; the engine returns a steelman, a counter, five stress tests, and a pre-vs-post confidence delta. |
+| **Backtester** | Tokenized stocks only (the server checks Bitget's live listing). Replays real Bitget 1h candles through the production skill pack using the same indicator code as the live desk (`src/indicators.js`), 200-candle window per bar, no lookahead. News and sentiment have no point-in-time archive, so they are held neutral, never seeded; macro regime is rebuilt per bar from the RSPY tape. Reports net-of-fee strategy return vs buy & hold, net win rate, max drawdown, timing lift, and precision/recall at move. |
+| **Thesis Lab** | Trader submits any thesis in plain English. The parser reads asset, side (negation-aware, with a Long/Short override), horizon, stated conviction, stop and target, and asks when the asset or side is missing instead of guessing. Each skill read is filed as backing, fighting or silent; the confidence walk moves from the trader's prior in log-odds and can go up or down, step by step. Stress tests are sized from the asset's own Bitget candles: 1σ day, worst 24h, largest 1h gap, measured beta vs RSPY (and BTC for crypto-linked stocks), earnings inside the horizon, liquidity, target reachability. |
 | **Portfolio Copilot** | Per-position Pearson correlation to BTC from cached real hourly returns, factor clustering, sector-concentration warnings. |
 | **Persona-tuned signals** | Risk profile + trading style + horizon preferences fold into composite threshold, skill weights, sizing, and target multiple. |
 | **One-click gate presets** | Settings → Trader profile ships three presets — Aggressive · demo-friendly, Balanced · out-of-box, Conservative · pro — each a single patch to risk profile, trading style, horizon, minimum confidence, minimum net edge, and max position size. |
@@ -142,7 +142,7 @@ Grouped by product pillar. Every row below is live in production.
 | **Report sharing** | Any report can be shared via a signed public URL with a 30-day expiry and a view counter. |
 | **Rate limiting** | Sliding-window per-key limiter on expensive endpoints (LLM-backed research, admin routes). |
 | **Deploy** | One Dockerfile, one `docker compose up`, `./data` bind-mount, `/health` + `/metrics` for uptime + Prometheus. |
-| **Test suite** | 119 `node:test` cases covering domain, backtest, live-data paths, JWT, RSS, store, alerts, sharing, copilot, playbooks, paper accounts, and session migration. |
+| **Test suite** | 141 `node:test` cases covering domain, backtest, live-data paths, JWT, RSS, store, alerts, sharing, copilot, playbooks, paper accounts, and session migration. |
 
 ---
 
@@ -150,7 +150,7 @@ Grouped by product pillar. Every row below is live in production.
 
 The product treats Bitget as its first-party venue across seven integration seams. Every seam is live and independently verifiable.
 
-### 1. Public market-data REST (all 81 assets)
+### 1. Public market-data REST (all 80 assets)
 
 Direct HTTPS to `api.bitget.com` for spot tickers, 1h candles, and 15-level orderbooks — for both crypto pairs and the R-prefixed tokenized-equity pairs. Feeds every price, indicator, and book depth surface in the app.
 
@@ -195,7 +195,7 @@ A companion Cloudflare Worker (`relay/worker.js`) transparently proxies Bitget's
      news-briefing · market-intel · TA      + 5 concrete stress tests
      sentiment-analyst · macro-analyst      + confidence delta
                     │
-     ├─ live Bitget WS + REST tape (81 assets)
+     ├─ live Bitget WS + REST tape (80 assets)
      ├─ real macro (Yahoo Finance)
      ├─ real news (17 feeds, LLM-classified)
      ├─ cross-venue perp positioning (Binance + OKX + Bitget)
@@ -247,10 +247,10 @@ A companion Cloudflare Worker (`relay/worker.js`) transparently proxies Bitget's
 | **Analysis** | Single-symbol workbench. Ticker + indicators + spot book + cross-venue positioning + macro + symbol-tagged news + earnings → Qwen four-part desk writeup with concrete verdict and levels. |
 | **News** | Live news tape with per-item impact analysis (relevance, direction, tagged assets, severity). |
 | **Signals** | Every generated signal with resolved outcome, plus the last opportunity scan. |
-| **Markets** | 81-asset scanner — live prices, class filter, watchlist toggle, one-click research. |
-| **Thesis Lab** | Stress-test any trader-submitted thesis. Steelman + counter + five stress tests + pre-vs-post confidence delta. |
+| **Markets** | 80-asset scanner — live prices, class filter, watchlist toggle, one-click research. |
+| **Thesis Lab** | Stress-test any trader-submitted thesis. Steelman + counter from the actual evidence, an auditable confidence walk, and stress tests sized from the asset's own Bitget history. |
 | **Portfolio** | Paper book (trader-approved fills only) marked to real WS tape; Δ-exposure / Δ-beta / sector-mix impact simulator. |
-| **Backtest** | Replays the skill pack and signal engine over cached real Bitget candles; reports precision, recall, and lift. |
+| **Backtest** | Replays the signal engine over real Bitget 1h candles for any of the 72 tokenized stocks; net-of-fee strategy vs buy & hold, drawdown, dated decision ledger. |
 | **The Assayer** | AI chat companion that drafts Playbooks from plain-English prompts. |
 | **History** | Every research report, trader decision, review, and session log. |
 | **Settings** | Trader profile, watchlist, and the **Bitget integrations** panel — Signal MCP status (LIVE + tool catalog), Public WebSocket status (STREAMING + pair coverage), Agentic Account (UTA v3) authorization state + Connect / Kill switch controls. |
@@ -314,7 +314,7 @@ Two clean layers. The **engine** (`src/domain.js`, `src/backtest.js`) knows noth
 │ server/static-serve.mjs   Combined SPA + API on one port            │
 │                                                                     │
 │ server/providers/                                                   │
-│   bitget.mjs              real REST — 81 assets: tickers, candles,  │
+│   bitget.mjs              real REST — 80 assets: tickers, candles,  │
 │                           books, indicators                         │
 │   bitget-ws.mjs           real WS — tick stream, all listed pairs,  │
 │                           auto-reconnect + heartbeat + freshness    │
@@ -346,7 +346,7 @@ Two clean layers. The **engine** (`src/domain.js`, `src/backtest.js`) knows noth
        │
        ↓
 ┌─────────────────────────── EXTERNAL ───────────────────────────────┐
-│ api.bitget.com                (81 pairs: spot / candles / book)    │
+│ api.bitget.com                (80 pairs: spot / candles / book)    │
 │ ws.bitget.com                 (public WS tick stream)              │
 │ datahub.noxiaohao.com/mcp     (Bitget Signal MCP, 19 tools)        │
 │ fapi.binance.com / okx.com    (cross-venue perp funding / OI)      │
@@ -487,7 +487,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
-| GET | `/prices/live` | Snapshot of live tickers for all 81 assets + stream mode indicator | — |
+| GET | `/prices/live` | Snapshot of live tickers for all 80 assets + stream mode indicator | — |
 | GET | `/prices/stream` | SSE stream of ticker updates | — |
 | GET | `/prices/indicators/:symbol` | Real EMA20/50, RSI14, ATR14, trend, support/resistance from Bitget candles | — |
 | GET | `/positioning/:symbol` | Aggregated funding + open interest across Binance / OKX / Bitget | — |
@@ -514,7 +514,8 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 |---|---|---|---|
 | GET | `/history/status` | Cached-candle warm status per asset | — |
 | GET | `/history/:symbol` | Cached hourly candles for the symbol | — |
-| POST | `/backtest/live` | Backtest against cached real Bitget candles | — |
+| GET | `/backtest/universe` | Tokenized stocks Bitget currently lists, with cached-candle coverage | — |
+| POST | `/backtest/live` | `{ symbol, horizon, prefs }` → replay on real Bitget candles (fetched on demand if not cached) | — |
 | POST | `/history/warm` | Force-refresh the candle cache | — |
 
 ### Auth & session
@@ -587,7 +588,7 @@ Copy `.env.example` to `.env` and fill in what you need. Nothing is required to 
 ## Testing
 
 ```bash
-npm test            # 119 node:test cases
+npm test            # 141 node:test cases
 npm run build       # produces static dist/
 ```
 
@@ -605,7 +606,7 @@ npm run lint:demo-strings   # fails the build if demo strings ship in dist/
 
 Everything below runs live on a fresh checkout with `npm install && npm run server`:
 
-- **Bitget public REST** — real spot tickers for all 81 assets (73 tokenized U.S. stocks/ETFs via Bitget R-pairs + 8 crypto correlation set), refreshed every 10 seconds.
+- **Bitget public REST** — real spot tickers for all 80 assets (72 tokenized U.S. stocks/ETFs via Bitget R-pairs + 8 crypto correlation set), refreshed every 10 seconds.
 - **Bitget public WebSocket** — real tick stream for every listed pair, sub-second cadence, auto-reconnect with heartbeat.
 - **Bitget indicators** — real EMA20/50, RSI14, ATR14, 48h swing support/resistance, volume z-score, 7d change computed from 200 hourly candles.
 - **Bitget spot orderbook** — real bid/ask depth, spread in bps, depth imbalance — for equities too.
@@ -618,7 +619,7 @@ Everything below runs live on a fresh checkout with `npm install && npm run serv
 - **BTC/ETH ETF flows** — best-effort Farside CSV net flows.
 - **News firehose** — 17 real RSS feeds (CoinDesk · The Block · CoinTelegraph · Bitget Announcements · SEC 8-K · per-CIK SEC Form 4 for 10 equities · Yahoo Finance · CNBC) with cross-source dedup + LLM classification.
 - **Signal history** — every LONG/SHORT signal recorded with entry price, resolved against real forward price at an 8-hour horizon; public hit-rate ledger.
-- **Backtests** — deep-paged real Bitget candles (~1,400–2,000 hourly bars per asset) with per-bar no-lookahead indicators.
+- **Backtests** — deep-paged real Bitget candles (~2,000 hourly bars per tokenized stock) replayed through the production indicator code with no lookahead; news/sentiment held neutral rather than seeded.
 - **Portfolio Copilot** — Pearson correlation to BTC computed from cached real hourly returns.
 
 ---
@@ -643,8 +644,9 @@ src/
                           direction-aware invalidation, thesis,
                           portfolio, review, paper execution
   domain.test.js          domain tests
-  backtest.js             precision/recall/lift over synthetic or real
-                          candles (per-bar no-lookahead indicators)
+  backtest.js             replay of the production signal engine over
+                          real Bitget candles (no lookahead, net of fees)
+  indicators.js           indicator math shared by live desk + backtest
   backtest.test.js        backtest tests
   main.jsx                SPA — 12 product surfaces
   styles.css              institutional dark terminal design
@@ -664,7 +666,7 @@ server/
   static-serve.mjs        production combined SPA + API on one port
   market-context.mjs      live universe builder
   live-enhance.mjs        report overlay — positioning, book depth, intel
-  history.mjs             deep-paged real candle cache (81 assets)
+  history.mjs             deep-paged real candle cache (80 assets)
   paper.mjs               server-authoritative paper capital ledger —
                           idempotent reserve/release by position id,
                           atomic P&L credit on close
@@ -677,7 +679,7 @@ server/
                           indicators (crypto + R-pair equities), retry
                           + exponential backoff + stale-shelf cache
     bitget-ws.mjs         real Bitget WebSocket — tick stream for all
-                          81 pairs, auto-reconnect + heartbeat
+                          80 pairs, auto-reconnect + heartbeat
     bitget-mcp.mjs        real Bitget Signal MCP client — Streamable
                           HTTP transport, session mgmt, 19 tools
     bitget-trading.mjs    Agent Hub OAuth + UTA v3 live order path

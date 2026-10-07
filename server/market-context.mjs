@@ -15,6 +15,7 @@ import { DEMO_UNIVERSE } from '../src/domain.js'
 import { getAllTickers, computeIndicators, mergeMarketRow } from './providers/bitget.mjs'
 import { getMacroSnapshot } from './providers/macro.mjs'
 import { loadHistory } from './history.mjs'
+import { classifyVolatility, classifyMomentum, classifyLiquidity } from '../src/indicators.js'
 import { getFearGreed } from './providers/marketintel.mjs'
 import { logger } from './lib/log.mjs'
 
@@ -39,21 +40,6 @@ async function mapLimit(items, limit, fn) {
   return out
 }
 let macroCache = { at: 0, snap: null }
-
-/** Derive honest HIGH/MED/LOW labels from real numbers. */
-function classifyVolatility(atrPct) { return atrPct >= 4 ? 'HIGH' : atrPct >= 2 ? 'MED' : 'LOW' }
-function classifyMomentum(change24h, volumeZ) {
-  const move = Math.abs(change24h ?? 0)
-  if (move >= 3 || (volumeZ != null && volumeZ >= 1.5)) return 'HIGH'
-  if (move >= 1 || (volumeZ != null && volumeZ >= 0.75)) return 'MED'
-  return 'LOW'
-}
-function classifyLiquidity(spreadBps, volumeUsd24h) {
-  const spreadOk = spreadBps == null || spreadBps <= 10
-  if (spreadOk && (volumeUsd24h ?? 0) >= 50_000_000) return 'HIGH'
-  if (spreadOk && (volumeUsd24h ?? 0) >= 5_000_000) return 'MED'
-  return 'LOW'
-}
 
 /**
  * Universe rows with the same shape as DEMO_UNIVERSE, but real prices,

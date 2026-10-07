@@ -22,6 +22,7 @@
  */
 
 import { CRYPTO_SYMBOL_LIST, EQUITY_SYMBOLS } from '../../src/domain.js'
+import { indicatorsFrom as sharedIndicatorsFrom } from '../../src/indicators.js'
 
 export const BITGET_BASE = process.env.BITGET_BASE_URL || 'https://api.bitget.com'
 const BITGET_CACHE_MS = Number(process.env.BITGET_CACHE_MS || 5000)
@@ -303,78 +304,11 @@ export async function computeIndicators(symbol, providedCandles = null) {
   return p
 }
 
+// Shared with the backtester (src/indicators.js) so replayed bars use the
+// exact formulas the live desk uses.
 function indicatorsFrom(symbol, candles) {
-  if (!candles || candles.length < 50) return null
-  const closes = candles.map(c => c.close)
-  const highs  = candles.map(c => c.high)
-  const lows   = candles.map(c => c.low)
-  const vols   = candles.map(c => c.volume || 0)
-  const last   = closes[closes.length - 1]
-
-  const ema = (period) => {
-    const k = 2 / (period + 1)
-    let e = closes.slice(0, period).reduce((s, x) => s + x, 0) / period
-    for (let i = period; i < closes.length; i++) e = closes[i] * k + e * (1 - k)
-    return e
-  }
-  const rsi = (period = 14) => {
-    let gains = 0, losses = 0
-    for (let i = closes.length - period; i < closes.length; i++) {
-      const diff = closes[i] - closes[i - 1]
-      if (diff >= 0) gains += diff; else losses -= diff
-    }
-    if (losses === 0) return 100
-    const rs = gains / losses
-    return 100 - 100 / (1 + rs)
-  }
-  const atr = (period = 14) => {
-    let sum = 0
-    for (let i = closes.length - period; i < closes.length; i++) {
-      const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]))
-      sum += tr
-    }
-    return sum / period
-  }
-  // Real volume z-score: last 24 bars vs the preceding ~7 days of hourly volume.
-  const volumeZ = (() => {
-    if (vols.length < 48) return null
-    const recent = vols.slice(-24)
-    const baseline = vols.slice(0, -24)
-    const baseMean = baseline.reduce((s, x) => s + x, 0) / baseline.length
-    const baseVar = baseline.reduce((s, x) => s + (x - baseMean) ** 2, 0) / baseline.length
-    const sd = Math.sqrt(baseVar)
-    if (!sd || !baseMean) return null
-    const recentMean = recent.reduce((s, x) => s + x, 0) / recent.length
-    return Number(((recentMean - baseMean) / sd).toFixed(2))
-  })()
-  const ema20 = ema(20), ema50 = ema(50)
-  const rsi14 = rsi(14)
-  const atr14 = atr(14)
-  const change7d = closes.length > 168 ? (last - closes[closes.length - 168]) / closes[closes.length - 168] : null
-  // Real swing levels: 48h low/high (≈ 2 daily sessions of 1h bars).
-  const swingLows  = lows.slice(-48)
-  const swingHighs = highs.slice(-48)
-  const support    = Math.min(...swingLows)
-  const resistance = Math.max(...swingHighs)
-  return {
-    symbol: String(symbol).toUpperCase(),
-    last,
-    ema20: Number(ema20.toFixed(4)),
-    ema50: Number(ema50.toFixed(4)),
-    rsi14: Number(rsi14.toFixed(1)),
-    atr14: Number(atr14.toFixed(4)),
-    atrPct: Number((atr14 / last * 100).toFixed(2)),
-    trend: last > ema20 && ema20 > ema50 ? 'UP' : last < ema20 && ema20 < ema50 ? 'DOWN' : 'SIDE',
-    macdCross: ema20 > ema50 ? 'BULL' : 'BEAR',
-    support: Number(support.toFixed(4)),
-    resistance: Number(resistance.toFixed(4)),
-    change7d,
-    change24h: closes.length > 24 ? Number((((last - closes[closes.length - 25]) / closes[closes.length - 25]) * 100).toFixed(2)) : null,
-    volumeZ,
-    candleCount: candles.length,
-    live: true,
-    source: 'bitget-public-rest',
-  }
+  const ind = sharedIndicatorsFrom(symbol, candles)
+  return ind ? { ...ind, source: 'bitget-public-rest' } : null
 }
 
 /** Convert a real ticker + indicators into a UI-facing MarketRow (same shape as DEMO_UNIVERSE). */

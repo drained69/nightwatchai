@@ -65,3 +65,7 @@ relay/.dev.vars
 # Editor project files (rare in this repo, cheap to guard against)
 *.sublime-project
 *.sublime-workspace
+
+# Demo video project — a standalone Remotion build; render output is large and
+# the generated soundtrack is not checked in. The folder itself stays local.
+video/
